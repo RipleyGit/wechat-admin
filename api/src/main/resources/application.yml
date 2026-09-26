@@ -78,7 +78,7 @@ wx:
 
 deploy:
   webhook:
-    appid: ${DEPLOY_WEBHOOK_APPID:wx8429f2092e30b56c}
+    appid: ${DEPLOY_WEBHOOK_APPID:wxfd938c6a7ced4eab}
     secret: ${DEPLOY_WEBHOOK_SECRET:wechat-admin}
     tag-name: ${DEPLOY_WEBHOOK_TAG_NAME:develop}
 logging:
