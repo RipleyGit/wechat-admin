@@ -67,18 +67,21 @@ jobs:
     environment: production
     steps:
       - name: Download web artifact
+        id: download_web
         uses: actions/download-artifact@v4
         with:
           name: web-dist
           path: release/web
 
       - name: Download API artifact
+        id: download_api
         uses: actions/download-artifact@v4
         with:
           name: api-jar
           path: release/api
 
       - name: Configure deployment SSH key
+        id: configure_ssh
         env:
           DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
@@ -90,6 +93,7 @@ jobs:
           chmod 600 ~/.ssh/known_hosts
 
       - name: Upload release files
+        id: upload
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
@@ -105,6 +109,7 @@ jobs:
             release/api/wx-api.jar "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar"
 
       - name: Activate release
+        id: activate
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
@@ -125,3 +130,105 @@ jobs:
             systemctl restart wechat-admin
             systemctl is-active --quiet wechat-admin
             rm -rf '$DEPLOY_PATH/.deploy/$RELEASE_ID'"
+
+      - name: Notify success via WeChat
+        if: success()
+        continue-on-error: true
+        env:
+          DEPLOY_WEBHOOK_SECRET: ${{ secrets.DEPLOY_WEBHOOK_SECRET }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          ACTOR: ${{ github.actor }}
+          BRANCH: ${{ github.ref_name }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, json, urllib.request, urllib.error, datetime
+          deploy_time = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
+          commit_msg = os.environ.get('COMMIT_MSG', '').splitlines()[0]
+          payload = json.dumps({
+              "branch": os.environ.get('BRANCH', ''),
+              "commit_msg": commit_msg,
+              "actor": os.environ.get('ACTOR', ''),
+              "status": "success",
+              "run_url": os.environ.get('RUN_URL', ''),
+              "deploy_time": deploy_time,
+          }, ensure_ascii=False).encode('utf-8')
+          req = urllib.request.Request(
+              'https://wechat.bleem.site/wx/deploy/webhook',
+              data=payload,
+              headers={
+                  'Content-Type': 'application/json; charset=utf-8',
+                  'X-Webhook-Secret': os.environ.get('DEPLOY_WEBHOOK_SECRET', '').strip(),
+              },
+              method='POST',
+          )
+          try:
+              with urllib.request.urlopen(req) as resp:
+                  print('Deploy webhook response:', resp.read().decode('utf-8'))
+          except urllib.error.HTTPError as e:
+              print(f'Deploy webhook HTTP error: {e.code} {e.reason}')
+              print('Response body:', e.read().decode('utf-8', errors='replace'))
+          except Exception as e:
+              print(f'Deploy webhook error: {e}')
+          PYEOF
+
+      - name: Notify failure via WeChat
+        if: failure() || cancelled()
+        continue-on-error: true
+        env:
+          DEPLOY_WEBHOOK_SECRET: ${{ secrets.DEPLOY_WEBHOOK_SECRET }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          ACTOR: ${{ github.actor }}
+          BRANCH: ${{ github.ref_name }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          STEP_DOWNLOAD_WEB: ${{ steps.download_web.outcome }}
+          STEP_DOWNLOAD_API: ${{ steps.download_api.outcome }}
+          STEP_CONFIGURE_SSH: ${{ steps.configure_ssh.outcome }}
+          STEP_UPLOAD: ${{ steps.upload.outcome }}
+          STEP_ACTIVATE: ${{ steps.activate.outcome }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, json, urllib.request, datetime
+          deploy_time = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
+          commit_msg = os.environ.get('COMMIT_MSG', '').splitlines()[0]
+          step_map = {
+              'STEP_DOWNLOAD_WEB':   ('下载前端构件', ''),
+              'STEP_DOWNLOAD_API':   ('下载后端构件', ''),
+              'STEP_CONFIGURE_SSH':  ('配置部署 SSH 密钥', ''),
+              'STEP_UPLOAD':         ('上传发布文件到服务器', ''),
+              'STEP_ACTIVATE':       ('激活新版本并重启服务', ''),
+          }
+          failed_step = '未知步骤'
+          for env_key, (name, err_detail) in step_map.items():
+              if os.environ.get(env_key, '') in ('failure', 'cancelled'):
+                  failed_step = name
+                  if err_detail:
+                      failed_step += f'\n错误：{err_detail[:200]}'
+                  break
+          payload = json.dumps({
+              "branch": os.environ.get('BRANCH', ''),
+              "commit_msg": commit_msg,
+              "actor": os.environ.get('ACTOR', ''),
+              "status": "failure",
+              "run_url": os.environ.get('RUN_URL', ''),
+              "deploy_time": deploy_time,
+              "failed_step": failed_step,
+          }, ensure_ascii=False).encode('utf-8')
+          req = urllib.request.Request(
+              'https://wechat.bleem.site/wx/deploy/webhook',
+              data=payload,
+              headers={
+                  'Content-Type': 'application/json; charset=utf-8',
+                  'X-Webhook-Secret': os.environ.get('DEPLOY_WEBHOOK_SECRET', '').strip(),
+              },
+              method='POST',
+          )
+          try:
+              with urllib.request.urlopen(req) as resp:
+                  print('Deploy webhook response:', resp.read().decode('utf-8'))
+          except urllib.error.HTTPError as e:
+              print(f'Deploy webhook HTTP error: {e.code} {e.reason}')
+              print('Response body:', e.read().decode('utf-8', errors='replace'))
+          except Exception as e:
+              print(f'Deploy webhook error: {e}')
+          PYEOF
