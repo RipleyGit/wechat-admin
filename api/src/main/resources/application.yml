@@ -6,7 +6,7 @@ server:
     threads:
         max: 1000
         min-spare: 30
-  port: ${SERVER_PORT:8088}
+  port: ${SERVER_PORT:18088}
   servlet:
     context-path: /wx
 
