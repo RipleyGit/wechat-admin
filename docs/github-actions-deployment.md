@@ -74,3 +74,9 @@ JAR are retained for rollback:
 
 To roll back, replace the stable paths with their `.previous` copies, then restart
 `wechat-admin`.
+
+## See also
+
+[deploy-notify-pipeline.md](deploy-notify-pipeline.md)（中文）covers the workflow step by step,
+the release-activation and readiness-probe semantics, and the post-deploy WeChat notification
+that is pushed to fans carrying a configured tag.
