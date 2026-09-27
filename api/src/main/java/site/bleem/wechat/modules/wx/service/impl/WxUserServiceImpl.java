@@ -145,6 +145,23 @@ public class WxUserServiceImpl extends ServiceImpl<WxUserMapper, WxUser> impleme
         this.update(update);
     }
 
+    /**
+     * 设置粉丝备注
+     * <p>
+     * 先调微信接口，成功了再写库：顺序反过来的话，微信那边失败（比如粉丝已取关、
+     * openid 不属于这个公众号）本地就留下了一条微信侧并不存在的备注。
+     * 微信报错直接往上抛，RRExceptionHandler 会把 errmsg 原样返回给前端。
+     */
+    @Override
+    public void updateRemark(String openid, String remark, String appid) throws WxErrorException {
+        String value = remark == null ? "" : remark.trim();
+        wxMpService.switchoverTo(appid);
+        wxMpService.getUserService().userUpdateRemark(openid, value);
+        logger.info("设置粉丝备注，openid={}，remark={}", openid, value);
+        // 不走 saveOrUpdate/updateOrInsert：那两条路都会跳过空串，清空备注就写不下去了
+        this.update(new UpdateWrapper<WxUser>().eq("openid", openid).set("remark", value));
+    }
+
     @Override
     public void unsubscribe(String openid) {
         userMapper.unsubscribe(openid);

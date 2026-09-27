@@ -11,6 +11,7 @@ export const api = {
   saveAccountConfig: (data) => http.post('/manage/console/account-config', data),
   followers: (params) => http.get('/manage/wxUser/list', { params }),
   syncFollowers: () => http.post('/manage/wxUser/syncWxUsers'),
+  setFollowerRemark: (data) => http.post('/manage/wxUser/updateRemark', data),
   tags: () => http.get('/manage/wxUserTags/list'),
   saveTag: (data) => http.post('/manage/wxUserTags/save', data),
   deleteTag: (id) => http.post(`/manage/wxUserTags/delete/${id}`),

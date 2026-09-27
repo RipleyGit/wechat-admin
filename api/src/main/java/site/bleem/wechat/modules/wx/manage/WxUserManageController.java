@@ -3,6 +3,7 @@ package site.bleem.wechat.modules.wx.manage;
 import site.bleem.wechat.common.utils.PageUtils;
 import site.bleem.wechat.common.utils.R;
 import site.bleem.wechat.modules.wx.entity.WxUser;
+import site.bleem.wechat.modules.wx.form.WxUserRemarkForm;
 import site.bleem.wechat.modules.wx.service.WxUserService;
 import site.bleem.wechat.modules.wx.service.WxUserTagsService;
 import site.bleem.wechat.modules.wx.vo.WxUserVO;
@@ -10,9 +11,11 @@ import com.alibaba.fastjson.JSONArray;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
+import me.chanjar.weixin.common.error.WxErrorException;
 import me.chanjar.weixin.mp.bean.tag.WxUserTag;
 import org.apache.shiro.authz.annotation.RequiresPermissions;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Arrays;
@@ -107,6 +110,25 @@ public class WxUserManageController {
     }
 
 
+
+    /**
+     * 设置粉丝备注
+     */
+    @PostMapping("/updateRemark")
+    @RequiresPermissions("wx:wxuser:save")
+    @ApiOperation(value = "设置粉丝备注（同步到微信）")
+    public R updateRemark(@CookieValue String appid, @RequestBody WxUserRemarkForm form) throws WxErrorException {
+        if (!StringUtils.hasText(form.getOpenid())) {
+            return R.error("openid不得为空");
+        }
+        String remark = form.getRemark() == null ? "" : form.getRemark().trim();
+        // 微信对备注长度有限制（30字符），提前挡掉，避免前端只拿到一句微信的报错
+        if (remark.length() > 30) {
+            return R.error("备注长度不得超过30个字符");
+        }
+        userService.updateRemark(form.getOpenid(), remark, appid);
+        return R.ok();
+    }
 
     /**
      * 删除

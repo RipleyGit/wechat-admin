@@ -2,6 +2,7 @@ package site.bleem.wechat.modules.wx.service;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.IService;
+import me.chanjar.weixin.common.error.WxErrorException;
 import site.bleem.wechat.modules.wx.entity.WxUser;
 
 import java.util.List;
@@ -35,6 +36,15 @@ public interface WxUserService extends IService<WxUser> {
      * @param user
      */
     void updateOrInsert(WxUser user);
+
+    /**
+     * 设置粉丝备注，同步到微信公众平台
+     *
+     * @param openid 粉丝openid
+     * @param remark 备注名，传空串表示清除备注
+     * @param appid  公众号appid
+     */
+    void updateRemark(String openid, String remark, String appid) throws WxErrorException;
 
     /**
      * 取消关注，更新关注状态

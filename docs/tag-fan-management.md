@@ -25,9 +25,11 @@
 
 ### remark 字段的来源
 
-`remark` 是**微信侧的备注**（公众号后台给粉丝设的备注名），同步时从 `wxMpUser.getRemark()` 取，写入本地只做展示。
+`remark` 是**微信侧的备注**（公众号后台给粉丝设的备注名），同步时从 `wxMpUser.getRemark()` 取。
 
-代码里**没有任何地方调用微信的"设置备注"接口**，也就是说这个系统对 remark 是只读同步 —— 本地改不了，要改得去微信后台改完再同步粉丝。
+注意 `WxUser(WxMpUser, appid)` 构造器里 `remark` 在 `if(wxMpUser.getSubscribe())` 分支内赋值 —— **取关的粉丝同步回来 remark 是 null**，配合下面 `updateOrInsert` 的语义不会覆盖掉库里的旧值。
+
+现在本地可以改了，见 [三、粉丝同步 → 设置备注](#设置备注写回微信)。
 
 ## 二、标签管理
 
@@ -82,7 +84,30 @@
 
 唯一的例外是 `subscribe`：它是原始 `boolean`，没有"缺失"状态可判断，所以**无条件覆盖**。`tagidList` 则是 `!= null` 时才写。
 
-这个方法主要服务于关注/取关等事件回调路径（本次梳理未逐一追溯调用方）。
+调用方只有一个：`WxAuthController.codeToUserInfo`（网页授权登录换取用户信息后落库）。那条路径传的是 `new WxUser(WxOAuth2UserInfo, appid)`，而这个构造器**根本不给 remark 赋值**，所以 remark 那行 `hasText` 判断在现有调用下永远走不到。
+
+### 设置备注：写回微信
+
+`WxUserServiceImpl.updateRemark(openid, remark, appid)`：
+
+```java
+String value = remark == null ? "" : remark.trim();
+wxMpService.switchoverTo(appid);
+wxMpService.getUserService().userUpdateRemark(openid, value);
+this.update(new UpdateWrapper<WxUser>().eq("openid", openid).set("remark", value));
+```
+
+对应微信接口 `POST /cgi-bin/user/info/updateremark`（weixin-java-mp 的 `WxMpUserService.userUpdateRemark`）。
+
+三个设计点：
+
+**先调微信、成功了再写库。** 顺序反过来的话，微信侧失败（粉丝已取关、openid 不属于这个公众号）本地就留下一条微信侧并不存在的备注。微信报错以 `WxErrorException` 往上抛，`RRExceptionHandler` 把 `errmsg` 原样返回前端。
+
+**本地写库用裸 `UpdateWrapper`，不用 `saveOrUpdate`/`updateOrInsert`。** 因为要支持**清空备注**：传空串时 `updateOrInsert` 的 `StringUtils.hasText` 判断会跳过这个字段，清空就写不下去。这里显式 `.set("remark", value)`，空串也照写。
+
+**和打标签不同，这里不做异步回拉。** 打标签之所以要 `refreshUserInfoAsync`（见 [打标签为什么是"最终一致"](#打标签为什么是最终一致)），是因为 `tagid_list` 是微信算出来的、本地推不出来；备注不一样，写进去的就是我们自己传的那个串，没有回拉的必要。所以备注是**立即一致**的，保存后前端直接改本地那行的 `row.remark`，不用重新拉列表。
+
+长度限制 30 字符：controller 里先挡一道（`remark.length() > 30` 直接 `R.error`），前端 `el-input` 也 `maxlength="30"`。数据库列是 `varchar(255)`，比微信的限制宽，所以真正的约束在微信那边。
 
 ## 四、接口清单
 
@@ -112,7 +137,10 @@
 | POST | `/listByIds` | `wx:wxuser:list` | body `String[] openids` |
 | GET | `/info/{openid}` | `wx:wxuser:info` | 返回 `{wxUser: ...}` |
 | POST | `/syncWxUsers` | `wx:wxuser:save` | 异步触发全量同步，立即返回"任务已建立"，**没有进度查询接口** |
+| POST | `/updateRemark` | `wx:wxuser:save` | body `WxUserRemarkForm{openid, remark}`；写回微信后再更新本地。`remark` 传空串表示清除备注 |
 | POST | `/delete` | `wx:wxuser:delete` | 只删本地记录，**不调微信接口**（不是取关） |
+
+`/updateRemark` 复用了 `wx:wxuser:save` 权限（和"同步粉丝"同一个），没有新增权限项 —— 种子数据里 wxuser 只有 `list`/`info`/`delete`/`save` 四个，不为这一个接口动 DDL。
 
 ### 标签名回填
 
@@ -135,6 +163,7 @@
 ```js
 followers: (params) => http.get('/manage/wxUser/list', { params }),
 syncFollowers: () => http.post('/manage/wxUser/syncWxUsers'),
+setFollowerRemark: (data) => http.post('/manage/wxUser/updateRemark', data),
 tags: () => http.get('/manage/wxUserTags/list'),
 saveTag: (data) => http.post('/manage/wxUserTags/save', data),
 deleteTag: (id) => http.post(`/manage/wxUserTags/delete/${id}`),
@@ -151,6 +180,8 @@ batchUnTag: (data) => http.post('/manage/wxUserTags/batchUnTagging', data),
 - **标签筛选**：`el-select` multiple，选中的 id 数组 join 成逗号串作为 `tagid` 参数，正好对上后端的切分逻辑
 - **打标签入口**：每行一个"打标签"按钮，顶部一个"批量打标签（N）"按钮（N 为表格勾选数），都走同一个 `openTagDialog(rows)`
 - **对话框预勾选取的是交集**：`tagIdSets.every(s => s.has(t.id))` —— 批量场景下只有**所有**选中粉丝都有的标签才预勾选，不是并集。这样"保存"时不会误给部分人加上他们本来没有的标签
+- **备注入口**：每行"备注"按钮开 `openRemarkDialog(row)`，对话框里 `maxlength="30" show-word-limit`，留空即清除。保存成功后直接改 `row.remark` 而不重新 `load()` —— 备注是立即一致的，没必要为一个字段再拉一次分页。接口失败不用自己弹提示，`http.js` 拦截器在 `code !== 200` 时已经 `ElMessage.error` 过了，所以 `catch` 是空的（但必须写，否则 reject 会变成 unhandled）
+- 操作列 `fixed="right"`，因为加了第二个按钮后列宽 90 → 150，窄屏下容易被挤出视野
 
 ### diff-sync 保存逻辑
 
@@ -201,8 +232,12 @@ toRemove  = beforeIds - afterIds   → 每个调一次 batchUnTag
 
 名字容易误解，它不会让用户取关，只是删本地记录。删完再跑一次全量同步，这些人又会回来（只要还关注着）。
 
-### 6. remark 只读
+### 6. ~~remark 只读~~ 备注已可写回微信
 
-见第一节。前端展示的备注来自微信，本系统改不了，也没有调微信设置备注接口的代码。
+~~见第一节。前端展示的备注来自微信，本系统改不了，也没有调微信设置备注接口的代码。~~
 
-> 改进建议：微信有 `updateRemark` 接口，如果需要在本系统里维护备注，可以接上；否则文档里说清楚只读就够了，避免以后误以为是 bug。
+**已实现**，见 [设置备注：写回微信](#设置备注写回微信)。留几条仍然成立的注意事项：
+
+- **`updateRemark` 的本地写库只按 openid 定位，没带 appid 条件。** 这在当前数据模型下是安全的：openid 是微信按公众号分配的，同一个人关注两个公众号会拿到两个不同的 openid、落成两行，不存在跨公众号串号。但如果哪天表结构改成 (openid, appid) 复合主键，这行 `UpdateWrapper` 要跟着加条件。
+- **改备注不校验粉丝是否还在关注。** 取关的粉丝调 `updateremark` 微信会报错，错误原样透给前端，不会静默失败，所以没额外加判断。
+- **30 字符是按微信文档写的，未实测边界。** 开发网络下 `developers.weixin.qq.com` 打不开，没法确认是 30 还是 30 以内。真超了微信会自己报错，不会写坏数据。
