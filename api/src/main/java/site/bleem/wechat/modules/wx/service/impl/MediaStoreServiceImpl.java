@@ -89,7 +89,7 @@ public class MediaStoreServiceImpl implements MediaStoreService {
 
     @Override
     @Async
-    public void transferInboundMediaAsync(Long msgId, String appid, String mediaId) {
+    public void transferInboundMediaAsync(Long msgId, String appid, String mediaId, String preferExt) {
         if (msgId == null || !StringUtils.hasText(appid) || !StringUtils.hasText(mediaId)) {
             return;
         }
@@ -105,7 +105,9 @@ public class MediaStoreServiceImpl implements MediaStoreService {
                 log.warn("媒体下载为空，msgId={}, mediaId={}", msgId, mediaId);
                 return;
             }
-            String ext = extOf(tmp.getName());
+            // 下载接口的 Content-Type 不一定可靠，有明确提示就用提示
+            String ext = StringUtils.hasText(preferExt) ? preferExt.toLowerCase() : extOf(tmp.getName());
+            logMagic(msgId, ext, tmp);
             String url = upload(appid, new FileInputStream(tmp), tmp.length(), contentTypeOf(ext), ext);
             if (url == null) {
                 return;
@@ -127,6 +129,37 @@ public class MediaStoreServiceImpl implements MediaStoreService {
             if (tmp != null && tmp.exists() && !tmp.delete()) {
                 log.debug("临时文件删除失败：{}", tmp.getAbsolutePath());
             }
+        }
+    }
+
+    /**
+     * 把文件头几个字节打进日志，用来确认微信实际给的编码格式
+     *
+     * 前端的 amr 解码库只吃 AMR-NB（头部 #!AMR\n），AMR-WB（#!AMR-WB\n）和 SILK（#!SILK_V3）都解不了。
+     * 微信回调里的 format 字段只说"amr"，不区分这三种，所以第一次收到语音时靠这条日志核实。
+     * 日志量很小（每条语音一行），留着也方便以后排查播放失败。
+     */
+    private void logMagic(Long msgId, String ext, File f) {
+        if (!"amr".equals(ext)) {
+            return;
+        }
+        try (InputStream in = new FileInputStream(f)) {
+            byte[] head = new byte[12];
+            int n = in.read(head);
+            if (n <= 0) {
+                return;
+            }
+            StringBuilder printable = new StringBuilder();
+            StringBuilder hex = new StringBuilder();
+            for (int i = 0; i < n; i++) {
+                int b = head[i] & 0xFF;
+                printable.append(b >= 0x20 && b < 0x7F ? (char) b : '.');
+                hex.append(String.format("%02x ", b));
+            }
+            log.info("语音文件头，msgId={}, size={}B, text=[{}], hex=[{}]",
+                    msgId, f.length(), printable, hex.toString().trim());
+        } catch (Exception e) {
+            log.debug("读取语音文件头失败，msgId={}", msgId, e);
         }
     }
 
@@ -166,6 +199,11 @@ public class MediaStoreServiceImpl implements MediaStoreService {
                 return "image/bmp";
             case "webp":
                 return "image/webp";
+            case "amr":
+                // 浏览器原生不认这个类型，前端用 WASM 解码，所以只要别被当成下载附件就行
+                return "audio/amr";
+            case "mp3":
+                return "audio/mpeg";
             default:
                 return DEFAULT_CONTENT_TYPE;
         }

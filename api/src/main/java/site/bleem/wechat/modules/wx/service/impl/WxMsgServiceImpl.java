@@ -76,21 +76,28 @@ public class WxMsgServiceImpl extends ServiceImpl<WxMsgMapper, WxMsg> implements
     }
 
     /**
-     * 入站图片转存到对象存储
+     * 入站图片和语音转存到对象存储
      *
-     * mediaId 三天过期，picUrl 虽然长期有效但依赖微信域名，所以转存一份自己的。
-     * 只处理图片：语音是 amr/speex，浏览器放不了，存了也没用。
+     * mediaId 三天过期。图片还有 picUrl 兜底，语音在微信侧没有任何长期地址，
+     * 不转存的话过期后原始音频就永久没了，而识别文字又是空的（见 docs/fan-messaging.md），
+     * 那条消息就彻底不可恢复。所以语音必须存。
      */
     private void tryTransferMedia(WxMsg msg) {
-        if (msg.getInOut() != WxMsg.WxMsgInOut.IN
-                || !WxConsts.XmlMsgType.IMAGE.equals(msg.getMsgType())
-                || msg.getDetail() == null) {
+        if (msg.getInOut() != WxMsg.WxMsgInOut.IN || msg.getDetail() == null) {
+            return;
+        }
+        String msgType = msg.getMsgType();
+        boolean isImage = WxConsts.XmlMsgType.IMAGE.equals(msgType);
+        boolean isVoice = WxConsts.XmlMsgType.VOICE.equals(msgType);
+        if (!isImage && !isVoice) {
             return;
         }
         String mediaId = msg.getDetail().getString("mediaId");
         if (!StringUtils.hasText(mediaId)) {
             return;
         }
-        mediaStoreService.transferInboundMediaAsync(msg.getId(), msg.getAppid(), mediaId);
+        // 语音用微信给的 format（amr），比下载响应头推断可靠
+        String preferExt = isVoice ? msg.getDetail().getString("format") : null;
+        mediaStoreService.transferInboundMediaAsync(msg.getId(), msg.getAppid(), mediaId, preferExt);
     }
 }

@@ -122,22 +122,50 @@ new ThreadPoolExecutor(5, 30, 60L, TimeUnit.SECONDS,
 | 类型 | 微信给什么 | 怎么处理 | 前端渲染 |
 | --- | --- | --- | --- |
 | 入站图片 | `picUrl` + `mediaId` | 照旧记两个字段，另起 `@Async` 用 `mediaDownload` 拉下来传 MinIO，回填 `detail.url` | `detail.url ?? detail.picUrl` |
-| 入站语音 | `mediaId` + `format`，**无任何 URL** | 不转存音频，只存识别文字 | `detail.recognition ?? '[语音]'` |
+| 入站语音 | `mediaId` + `format`，**无任何 URL** | 必须转存音频到 MinIO，回填 `detail.url`（识别文字实测恒空，见下） | `VoiceBubble` 浏览器解码播放 |
 | 出站图片 | —— | 同时传 MinIO（展示用）和 `mediaUpload` 拿 mediaId（发送用），两个都记进 detail | `detail.url` |
 
-入站图片保留 `picUrl` 作为兜底：它是 `mmbiz.qpic.cn` 的长期地址，转存失败时图片仍然能显示。**入站语音没有这个兜底**，`WxMsg` 里只存了 `format` 和 `mediaId`，一旦 3 天过期就彻底拿不到了。
+入站图片保留 `picUrl` 作为兜底：它是 `mmbiz.qpic.cn` 的长期地址，转存失败时图片仍然能显示。**入站语音没有这个兜底**，微信侧不给任何长期地址，`mediaId` 3 天一过原始音频就永久拿不回来。所以语音的转存不是优化，是唯一的保存机会。
 
-### 语音转文字是免费的
+### 微信的语音识别结果是空的（实测）
 
-公众号后台「设置与开发 > 接口权限」开启**接收语音识别结果**后，入站语音的回调 XML 自带 `<Recognition>` 元素，`WxMpXmlMessage.getRecognition()` 直接读。**零 API 调用、零配额、不增加回调延迟。**
+这一节原来写的是「语音转文字是免费的，开开关就行」。**这个判断是错的**，下面是实测结果。
 
-对比另一条路 `WxMpAiOpenService`（`uploadVoice` → `queryRecognitionResult` 轮询）：要下载再上传再轮询，还要求已认证的服务号，重得多。不用。
+公众号后台「设置与开发 > 接口权限」的**接收语音识别结果**开关确实开着，回调 XML 里 `<Recognition>` 元素也确实推过来了，但值恒为空：
 
-`WxMsg` 的 VOICE 分支现在只存 `format` 和 `mediaId`，**要加一行** `detail.put("recognition", wxMessage.getRecognition())`。开关没开时返回 null，前端渲染 `[语音]` 占位，功能不崩。
+```xml
+<MsgType><![CDATA[voice]]></MsgType>
+<Format><![CDATA[amr]]></Format>
+<Recognition><![CDATA[]]></Recognition>
+```
 
-### 为什么不存语音文件
+2026-09-27 生产日志里三条语音全是这样。怎么确认开关是开的：fastjson `toJSONString()` 会丢掉 null 字段，而库表里存下来的 JSON 有 `"recognition":""` 这个键，说明 `getRecognition()` 返回的是空串不是 null，也就是说微信**推了这个元素**——开关没开的话元素根本不会出现。
 
-微信语音是 AMR/speex，浏览器 `<audio>` 放不了，要转码成 mp3。生产是 systemd 裸 jar 部署（不是 Docker），**没有 ffmpeg**。所以只存识别文字，不留音频。
+也排除了「开关对已关注用户 24 小时后才生效」这条解释：取关（17:24:35）→ 重新关注（17:24:39）→ 发语音（17:24:50），一个存在 11 秒的新关注者，结果一样是空。
+
+失败点在微信服务端，代码侧无解。`detail.recognition` 的读取逻辑保留着，万一哪天微信修了就能直接用上。
+
+### 语音要怎么听：浏览器解码
+
+既然识别文字拿不到，音频本体就是唯一可用的内容，必须存，并且要能播。
+
+微信语音是 AMR，浏览器 `<audio>` 原生不认。服务端转码这条路走不通：生产机 1682MB 内存只剩 90~140MB 可用且 **swap 为 0**，同机还跑着 MariaDB、Docker 和几个 Python 服务。JVM 自己是有上限的（`JAVA_OPTS=-Xms128m -Xmx384m -XX:MaxMetaspaceSize=128m`），但在这么点余量下再起 ffmpeg 转码进程，OOM killer 挑谁杀不由我们决定。
+
+所以解码放浏览器：`web/src/components/VoiceBubble.vue` 用 `benz-amr-recorder` 做 WASM 解码，点击才 `import()`（压缩后 446KB，独立 chunk，不进首屏）。
+
+两个要注意的点：
+
+- **只支持 AMR-NB。** 这个库的 codec 是 `amrnb.js`，AMR-WB（头 `#!AMR-WB\n`）和 SILK（`#!SILK_V3`）都解不了。回调的 `format` 字段只写 `amr`，不区分。所以 `MediaStoreServiceImpl.logMagic()` 会把文件头 12 字节打进日志核实实际格式，预期是 `#!AMR\n`。
+- **`initWithUrl()` 是库自己去 fetch 这个 URL，所以受 CORS 限制。** MinIO 的公开地址必须和前端同源（走 nginx 的 `/minio/` 反代），否则要给 MinIO 单独配 CORS。
+
+### 转成中文文字（未实现）
+
+微信的 `Recognition` 既然是空的，要文字就得自己接 ASR。**目前没做，也没留空接口**——没有实现的接口就是死代码。
+
+接的时候有两个已知信息：
+
+- 微信实际推的是 `<MediaId16K>`（16K 采样，ASR 该用这个），但 **weixin-java-mp 4.5.6.B 的 `WxMpXmlMessage` 里没有 `getMediaId16K()` 这个字段**，`grep -c` 为 0。要用得自己解原始 XML 或者升级库。播放用 8K 的 `MediaId` 就够，两者分工不同。
+- 微信自己还有另一条链路 `WxMpAiOpenService`（`uploadVoice` → `queryRecognitionResult` 轮询，打的是 `/cgi-bin/media/voice/addvoicetorecofortext`），jar 里方法都在。但这条链路现在还通不通**没有验证过**——`developers.weixin.qq.com` 在当前环境取不到。既然回调那条已经死了，别默认这条是活的。
 
 ## 五、接口
 
@@ -194,6 +222,12 @@ Element Plus 没有聊天组件，两栏 IM 用 `el-scrollbar` + `el-avatar` + `
 
 前端用 `last_in_time` 算剩余时间（`last_in_time + 48h - now`）显示倒计时，过期即禁用输入框并说明原因。不做前端绕过，后端 `/send` 也要自己校验——前端禁用只是体验，不是权限。
 
+### VoiceBubble：解码库必须懒加载
+
+`web/src/components/VoiceBubble.vue`，`benz-amr-recorder` 压缩后 446KB，直接 import 会把首屏包顶起来一大截，所以是**首次点击播放时**才 `await import()`。构建产物里它是独立 chunk（`BenzAMRRecorder-*.js`），确认没被并进 `index`。
+
+实例建好之后缓存在组件里，重复点击不重新下载音频。`onBeforeUnmount` 里必须 `destroy()`：解码出来的 Float32Array 和 AudioContext 不释放，会话切几十条语音就很占内存。
+
 ## 七、MinIO
 
 pom 加 `io.minio:minio:8.5.2`。用 `wechat` 桶（原本是空的），匿名读 + 列举都已开启，不用改桶策略。
@@ -216,9 +250,34 @@ MINIO_ENDPOINT / MINIO_ACCESS_KEY / MINIO_SECRET_KEY / MINIO_BUCKET / MINIO_SECU
 
 本地和生产的 `MINIO_ENDPOINT` 值**合理地不同**：生产填 `dsm.bleem.site:9000`（内网直连），本地必须填公网 IP，因为内网域名在办公网外解析不了。
 
-### 服务器 nginx
+### 生产配置（2026-09-27 已完成）
 
-`/usr/local/nginx/bleem-nginx/http_wechat.conf` 加 `/minio/` location 反代到 `127.0.0.1:9000`，然后 reload。**只在服务器改，不进仓库**——这几个 conf 在服务器上本来就是未跟踪状态。
+环境变量文件是 `/etc/wechat-admin/wechat-admin.env`（**不是** `/opt/wechat-admin/` 下面那个），0600 root。配置**不进仓库**，仓库根目录那份同名文件已被 `.gitignore:31` 挡住。
+
+在这之前生产是**完全没配 MinIO** 的，启动日志一直是 `WARN MinioConfig - MinIO 未配置（缺 endpoint/accessKey/secretKey/bucket）`，也就是说**所有媒体转存都在空转，图片也一样**——只是这个号从来没收到过图片，所以没人发现。现在六个键都补上了：
+
+```
+MINIO_ENDPOINT=dsm.bleem.site:9000     # 内网直连，不绕本机 nginx:9000 那一跳
+MINIO_SECURE=false
+MINIO_BUCKET=wechat
+MINIO_PUBLIC_BASE_URL=https://wechat.bleem.site/minio/wechat
+MINIO_ACCESS_KEY / MINIO_SECRET_KEY    # 值不在文档和仓库里
+```
+
+**`MINIO_PUBLIC_BASE_URL` 是必须的，不是可选项。** 留空时 `publicUrl()` 回退到 endpoint 直连，浏览器就要跨域取对象，而 `initWithUrl()` 是前端自己 fetch，会被 CORS 拦掉。配成 `https://wechat.bleem.site/minio/wechat` 就是同源，不用给 MinIO 单独配 CORS。
+
+改完 `systemctl restart wechat-admin`，启动日志应该是 `INFO MinioConfig - MinIO 客户端初始化，endpoint=dsm.bleem.site:9000, bucket=wechat`。
+
+### 服务器 nginx（已完成）
+
+`/usr/local/nginx/bleem-nginx/http_wechat.conf`（vhost 是 `wechat.bleem.site`）加了 `location ^~ /minio/`，反代到 `dsm.bleem.site:9000/`。**只在服务器改，不进仓库**——这几个 conf 在服务器上本来就是未跟踪状态。
+
+两个容易踩的点：
+
+- **必须是 `^~` 而不是普通前缀。** 同一个 server 块里有 `location ~* \.(?:js|css|png|jpg|...)$`，**正则的优先级高于普通前缀 location**，所以 `/minio/**/*.jpg` 会被它截走去本地磁盘找文件然后 404。`^~` 的作用就是让前缀匹配压过正则。语音是 `.amr`，不在那个扩展名列表里，所以只测语音**测不出这个 bug**，图片才会暴露。验证方式：`curl https://wechat.bleem.site/minio/wechat/__probe_not_exist__.jpg` 要返回 MinIO 的 `NoSuchKey` XML，如果返回 nginx 的 404 页面就说明 `^~` 没生效。
+- **上游不是 `127.0.0.1:9000`。** 这台机器的 9000 端口是 **nginx 自己**在听（`http_9000_minio.conf`，`server_name aliyun.bleem.site`），它再转给 `dsm.bleem.site:9000`。所以直接反代到 dsm 少一跳。另外这里显式写了 `proxy_set_header Host dsm.bleem.site:9000`，而不是透传 `$host`：实测 MinIO 目前没启用 virtual-host 寻址（带 `Host: wechat.bleem.site` 也能正确解析出 `wechat` 桶），但万一以后配了 `MINIO_DOMAIN`，透传会让它把 `wechat.bleem.site` 当成桶名。
+
+`wechat` 桶的匿名读已开（访问不存在的对象返回 `NoSuchKey` 而不是 `AccessDenied`），桶策略不用改。
 
 ## 八、已知行为与注意事项
 
@@ -238,19 +297,21 @@ public R reply(@CookieValue String appid, @RequestBody WxMsgReplyForm form){
 
 这是私信要走的同一条路径。新增的 `/send` 必须自己调，同时把 `/reply` 这个存量 bug 一起修掉。
 
-### 2. MinIO 凭证越权，上线前应收窄
+### 2. MinIO 凭证越权（已知，暂缓处理）
 
 当前这把凭证能看见 6 个桶：`bleem`、`hao`、`ict`、`pco-haoyuan`、`pco-mgr`、`wechat`，**删除权限实测是通的**。接进 wechat-admin 等于给这个服务开了对其他团队存储的读写删权限。
 
-> 改进建议：建一个只能访问 `wechat` 桶的 MinIO service account 替换掉。需要 MinIO 管理员权限。
+2026-09-27 配置生产时**沿用了这把凭证**，收窄的事按决定往后放。也就是说现在跑在生产上的 wechat-admin 有能力删掉 pco 那几个桶的数据——不是它会这么做，是它有这个能力，一旦这个服务被打穿，爆炸半径就不止 `wechat` 桶。
 
-### 3. 粉丝上传的图片是公开且可枚举的
+> 待办：建一个只能访问 `wechat` 桶的 MinIO service account 换掉。需要 MinIO 管理员权限，换完只改 `/etc/wechat-admin/wechat-admin.env` 里那两个键再重启，代码不动。
+
+### 3. 粉丝上传的图片和语音是公开且可枚举的
 
 `wechat` 桶匿名读 + **列举**都开着（沿用 pco 现状，已知并接受）。这意味着任何人不需要凭证就能列出桶里所有对象并下载——不只是"URL 猜不到所以安全"，是可以直接遍历。
 
-粉丝私信里发的图片可能包含身份证、病历、聊天截图这类东西。
+**语音上线后这条的暴露面变大了。** 原先只有图片，现在粉丝说的每一句话都会有一份长期可公开下载的音频，而且对象路径按 `wxmsg/{appid}/{yyyyMMdd}/` 分区，列举出来等于拿到一份按日期排好的录音清单。图片可能含身份证、病历、聊天截图，语音则是可辨识的人声本身。
 
-> 改进建议：关掉匿名列举（只留读），或改成预签名 URL。前者一条桶策略就能改，代价是 pco 那边如果依赖列举会受影响，要先确认。
+> 改进建议：关掉匿名列举（只留读），或改成预签名 URL。前者一条桶策略就能改，代价是 pco 那边如果依赖列举会受影响，要先确认。**预签名会和 `MINIO_PUBLIC_BASE_URL` 这套同源直链冲突**，要一起改前端。
 
 ### 4. KfSessionHandler 是空壳
 

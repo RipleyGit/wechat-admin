@@ -72,8 +72,9 @@ public class WxMsg implements Serializable {
 		}else if(WxConsts.XmlMsgType.VOICE.equals(this.msgType)){
 			this.detail.put("format",wxMessage.getFormat());
 			this.detail.put("mediaId",wxMessage.getMediaId());
-			// 语音识别结果。需在公众号后台开启"接收语音识别结果"，免费，无额外请求。
-			// 没开启时为 null，前端展示"[语音]"。语音文件本身是 amr/speex，浏览器放不了，所以不存文件。
+			// 微信的语音识别结果。后台开关已确认开启，但实测这个字段恒为空字符串，
+			// 三条语音全空（2026-09-27 生产日志），取关重关也一样，所以别指望它。
+			// 详见 docs/fan-messaging.md 的语音一节。音频本体由 MediaStoreService 转存，前端 WASM 解码播放。
 			this.detail.put("recognition",wxMessage.getRecognition());
 		}else if(WxConsts.XmlMsgType.VIDEO.equals(this.msgType) ||
 				WxConsts.XmlMsgType.SHORTVIDEO.equals(this.msgType)){

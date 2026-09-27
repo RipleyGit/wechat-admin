@@ -62,10 +62,12 @@
                   fit="cover"
                   class="bubble-image"
                 />
-                <!-- 语音只存识别文字，amr 浏览器放不了。没开识别时就只有这个标记 -->
-                <template v-else-if="msg.msgType === 'voice'">
-                  <span class="muted">[语音]</span>{{ msg.detail?.recognition ? ' ' + msg.detail.recognition : '' }}
-                </template>
+                <!-- 语音：音频转存到对象存储后由前端解码播放，detail.url 为空说明还没转存好或 MinIO 未配置 -->
+                <VoiceBubble
+                  v-else-if="msg.msgType === 'voice'"
+                  :url="msg.detail?.url || ''"
+                  :recognition="msg.detail?.recognition || ''"
+                />
                 <template v-else-if="msg.msgType === 'location'">
                   <span class="muted">[位置]</span> {{ msg.detail?.label }}
                 </template>
@@ -112,6 +114,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Picture, Refresh } from '@element-plus/icons-vue'
 import { api } from '@/api/console'
+import VoiceBubble from '@/components/VoiceBubble.vue'
 
 /** 打开会话时的时间线轮询间隔 */
 const TIMELINE_POLL_INTERVAL = 15000

@@ -7,6 +7,9 @@ import java.io.InputStream;
  *
  * 微信 mediaId 3 天过期，不能用于长期展示，所以入站媒体要转存到对象存储。
  * MinIO 未配置时所有方法返回 null，调用方降级（图片回退 picUrl，出站图片拒绝发送）。
+ *
+ * 语音尤其依赖这个：图片还有 picUrl 可以兜底，语音在微信侧没有任何长期可访问的地址，
+ * mediaId 一过期原始音频就永久拿不回来了。
  */
 public interface MediaStoreService {
     /**
@@ -31,9 +34,11 @@ public interface MediaStoreService {
      *
      * 异步执行：回调有 5 秒超时，下载加上传远超这个时间。
      *
-     * @param msgId   wx_msg 主键
-     * @param appid   公众号
-     * @param mediaId 微信媒体 id
+     * @param msgId     wx_msg 主键
+     * @param appid     公众号
+     * @param mediaId   微信媒体 id
+     * @param preferExt 扩展名提示，不含点。下载接口的 Content-Type 不一定可靠，
+     *                  语音这类已知格式直接用微信 XML 里的 format 更稳。传 null 时按下载结果推断。
      */
-    void transferInboundMediaAsync(Long msgId, String appid, String mediaId);
+    void transferInboundMediaAsync(Long msgId, String appid, String mediaId, String preferExt);
 }
