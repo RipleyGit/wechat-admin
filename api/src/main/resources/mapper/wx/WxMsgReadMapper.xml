@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="site.bleem.wechat.modules.wx.dao.WxMsgReadMapper">
+
+    <!-- GREATEST 保证水位线只增不减：并发的两个标记已读乱序到达时，
+         小的那个不能把已读位点拉回去，否则红点会复活 -->
+    <insert id="upsertLastReadMsgId">
+        INSERT INTO wx_msg_read (appid, openid, user_id, last_read_msg_id)
+        VALUES (#{appid}, #{openid}, #{userId}, #{lastReadMsgId})
+        ON DUPLICATE KEY UPDATE
+            last_read_msg_id = GREATEST(last_read_msg_id, VALUES(last_read_msg_id))
+    </insert>
+
+</mapper>

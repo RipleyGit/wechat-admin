@@ -15,6 +15,7 @@ const router = createRouter({
         { path: 'tags', name: 'tags', component: () => import('@/views/TagsView.vue') },
         { path: 'materials', name: 'materials', component: () => import('@/views/MaterialsView.vue') },
         { path: 'menu', name: 'menu', component: () => import('@/views/MenuView.vue') },
+        { path: 'messages', name: 'messages', component: () => import('@/views/MessagesView.vue') },
         { path: 'replies', name: 'replies', component: () => import('@/views/RepliesView.vue') },
         { path: 'qrcodes', name: 'qrcodes', component: () => import('@/views/QrcodesView.vue') },
       ],

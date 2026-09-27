@@ -28,3 +28,4 @@ web/node_modules/
 web/dist/
 api/deploy/wechat-admin.env
 pco-code
+wechat-admin.env

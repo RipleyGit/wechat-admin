@@ -50,8 +50,8 @@ public class WxMsg implements Serializable {
 	private Date createTime;
 
 	public static class WxMsgInOut{
-		static final byte IN=0;
-		static final byte OUT=1;
+		public static final byte IN=0;
+		public static final byte OUT=1;
 	}
 
 	public WxMsg() {
@@ -72,6 +72,9 @@ public class WxMsg implements Serializable {
 		}else if(WxConsts.XmlMsgType.VOICE.equals(this.msgType)){
 			this.detail.put("format",wxMessage.getFormat());
 			this.detail.put("mediaId",wxMessage.getMediaId());
+			// 语音识别结果。需在公众号后台开启"接收语音识别结果"，免费，无额外请求。
+			// 没开启时为 null，前端展示"[语音]"。语音文件本身是 amr/speex，浏览器放不了，所以不存文件。
+			this.detail.put("recognition",wxMessage.getRecognition());
 		}else if(WxConsts.XmlMsgType.VIDEO.equals(this.msgType) ||
 				WxConsts.XmlMsgType.SHORTVIDEO.equals(this.msgType)){
 			this.detail.put("thumbMediaId",wxMessage.getThumbMediaId());

@@ -81,6 +81,17 @@ deploy:
     appid: ${DEPLOY_WEBHOOK_APPID:wxfd938c6a7ced4eab}
     secret: ${DEPLOY_WEBHOOK_SECRET:wechat-admin}
     tag-name: ${DEPLOY_WEBHOOK_TAG_NAME:develop}
+
+# 私信媒体转存。access-key/secret-key 故意不给默认值：
+# 没配就让 MinioConfig 跳过初始化（私信降级为纯文字），不要把凭证写进仓库
+minio:
+  endpoint: ${MINIO_ENDPOINT:}
+  access-key: ${MINIO_ACCESS_KEY:}
+  secret-key: ${MINIO_SECRET_KEY:}
+  bucket: ${MINIO_BUCKET:wechat}
+  secure: ${MINIO_SECURE:false}
+  # 对外访问前缀，走 nginx 的 /minio/ 反代；留空则回退到 endpoint 直连
+  public-base-url: ${MINIO_PUBLIC_BASE_URL:}
 logging:
   level:
     me:

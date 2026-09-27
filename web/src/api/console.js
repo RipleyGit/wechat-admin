@@ -29,4 +29,9 @@ export const api = {
   qrcodes: (params) => http.get('/manage/wxQrCode/list', { params }),
   createQrcode: (data) => http.post('/manage/wxQrCode/createTicket', data),
   deleteQrcodes: (ids) => http.post('/manage/wxQrCode/delete', ids),
+  msgSessions: (params) => http.get('/manage/wxMsg/sessions', { params }),
+  msgTimeline: (params) => http.get('/manage/wxMsg/timeline', { params }),
+  msgMarkRead: (data) => http.post('/manage/wxMsg/read', data),
+  msgUnreadCount: () => http.get('/manage/wxMsg/unread-count'),
+  sendMsg: (data) => http.post('/manage/wxMsg/send', data),
 }

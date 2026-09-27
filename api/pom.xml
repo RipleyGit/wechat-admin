@@ -30,6 +30,9 @@
 		<fastjson.version>2.0.28</fastjson.version>
 		<lombok.version>1.18.22</lombok.version>
 		<weixin-java.version>4.5.6.B</weixin-java.version>
+		<!-- 不要升 9.x：9.x 依赖 okhttp 5.x，其主 jar 是 KMP 元数据空壳且 POM 未声明 okhttp-jvm，
+		     Maven 解析后 classpath 上没有实现类，运行时必然 NoClassDefFoundError。详见 docs/fan-messaging.md -->
+		<minio.version>8.5.2</minio.version>
 	</properties>
 
 	<dependencies>
@@ -122,6 +125,11 @@
 					<artifactId>slf4j-log4j12</artifactId>
 				</exclusion>
 			</exclusions>
+		</dependency>
+		<dependency>
+			<groupId>io.minio</groupId>
+			<artifactId>minio</artifactId>
+			<version>${minio.version}</version>
 		</dependency>
 		<dependency>
 			<groupId>com.alibaba</groupId>

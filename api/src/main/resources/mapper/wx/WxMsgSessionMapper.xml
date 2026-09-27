@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="site.bleem.wechat.modules.wx.dao.WxMsgSessionMapper">
+
+    <!-- 时间线可见的消息：排除 event（关注/菜单点击等不是对话内容），
+         排除 transfer_customer_service（转多客服的系统出站记录，每条未命中消息都会产生一条）-->
+    <sql id="visibleMsg">
+        m.msg_type &lt;&gt; 'event' AND m.msg_type &lt;&gt; 'transfer_customer_service'
+    </sql>
+
+    <!-- 未读：该运营的水位线之后、粉丝发来的、可展示的消息 -->
+    <sql id="unreadCountExpr">
+        (SELECT COUNT(*) FROM wx_msg m
+          WHERE m.appid = s.appid AND m.openid = s.openid
+            AND m.in_out = 0
+            AND <include refid="visibleMsg"/>
+            AND m.id &gt; IFNULL(r.last_read_msg_id, 0))
+    </sql>
+
+    <select id="selectSessionViews" resultType="site.bleem.wechat.modules.wx.dto.WxMsgSessionView">
+        SELECT s.openid,
+               u.nickname,
+               u.headimgurl,
+               u.remark,
+               s.last_msg_time    AS lastMsgTime,
+               s.last_msg_summary AS lastMsgSummary,
+               s.last_in_time     AS lastInTime,
+               <include refid="unreadCountExpr"/> AS unreadCount
+        FROM wx_msg_session s
+        LEFT JOIN wx_user u ON u.appid = s.appid AND u.openid = s.openid
+        LEFT JOIN wx_msg_read r ON r.appid = s.appid AND r.openid = s.openid AND r.user_id = #{userId}
+        WHERE s.appid = #{appid}
+          AND s.has_real_msg = 1
+        <if test="keyword != null and keyword != ''">
+          AND (u.nickname LIKE CONCAT('%', #{keyword}, '%') OR u.remark LIKE CONCAT('%', #{keyword}, '%'))
+        </if>
+        ORDER BY s.last_msg_time DESC
+        LIMIT #{offset}, #{limit}
+    </select>
+
+    <select id="countSessions" resultType="long">
+        SELECT COUNT(*)
+        FROM wx_msg_session s
+        <if test="keyword != null and keyword != ''">
+        LEFT JOIN wx_user u ON u.appid = s.appid AND u.openid = s.openid
+        </if>
+        WHERE s.appid = #{appid}
+          AND s.has_real_msg = 1
+        <if test="keyword != null and keyword != ''">
+          AND (u.nickname LIKE CONCAT('%', #{keyword}, '%') OR u.remark LIKE CONCAT('%', #{keyword}, '%'))
+        </if>
+    </select>
+
+    <select id="countUnreadSessions" resultType="int">
+        SELECT COUNT(*)
+        FROM wx_msg_session s
+        LEFT JOIN wx_msg_read r ON r.appid = s.appid AND r.openid = s.openid AND r.user_id = #{userId}
+        WHERE s.appid = #{appid}
+          AND s.has_real_msg = 1
+          AND <include refid="unreadCountExpr"/> &gt; 0
+    </select>
+
+    <!-- 摘要更新带时间守卫：addWxMsg 是 @Async 的，两条消息可能乱序落库，
+         迟到的旧消息不能把摘要盖回去。
+         注意赋值顺序：last_msg_summary 必须在 last_msg_time 之前，
+         MySQL 从左到右求值，反了的话守卫条件读到的已经是新时间。 -->
+    <insert id="upsertLastMsg">
+        INSERT INTO wx_msg_session (appid, openid, last_msg_time, last_msg_summary, has_real_msg)
+        VALUES (#{appid}, #{openid}, #{msgTime}, #{summary}, 1)
+        ON DUPLICATE KEY UPDATE
+            last_msg_summary = IF(last_msg_time IS NULL OR #{msgTime} &gt;= last_msg_time,
+                                  VALUES(last_msg_summary), last_msg_summary),
+            last_msg_time    = IF(last_msg_time IS NULL OR #{msgTime} &gt;= last_msg_time,
+                                  VALUES(last_msg_time), last_msg_time),
+            has_real_msg     = 1
+    </insert>
+
+    <!-- 入站时间单调递增。has_real_msg 不动：只点了菜单的粉丝不该出现在会话列表里 -->
+    <insert id="upsertLastInTime">
+        INSERT INTO wx_msg_session (appid, openid, last_in_time)
+        VALUES (#{appid}, #{openid}, #{inTime})
+        ON DUPLICATE KEY UPDATE
+            last_in_time = IF(last_in_time IS NULL OR #{inTime} &gt; last_in_time,
+                              VALUES(last_in_time), last_in_time)
+    </insert>
+
+</mapper>
