@@ -15,6 +15,7 @@ export const api = {
   saveTag: (data) => http.post('/manage/wxUserTags/save', data),
   deleteTag: (id) => http.post(`/manage/wxUserTags/delete/${id}`),
   batchTag: (data) => http.post('/manage/wxUserTags/batchTagging', data),
+  batchUnTag: (data) => http.post('/manage/wxUserTags/batchUnTagging', data),
   materials: (params) => http.get('/manage/wxAssets/materialFileBatchGet', { params }),
   materialCount: () => http.get('/manage/wxAssets/materialCount'),
   uploadMaterial: (data) => http.post('/manage/wxAssets/materialFileUpload', data),

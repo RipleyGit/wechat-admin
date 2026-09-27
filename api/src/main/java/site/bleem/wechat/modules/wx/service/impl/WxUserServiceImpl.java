@@ -52,16 +52,25 @@ public class WxUserServiceImpl extends ServiceImpl<WxUserMapper, WxUser> impleme
 		String city = (String) params.get("city");
 		String tagId = (String) params.get("tagid");
 		String qrSceneStr = (String) params.get("qrSceneStr");
-        return this.page(
-            new Query<WxUser>().getPage(params),
-            new QueryWrapper<WxUser>()
+		QueryWrapper<WxUser> wrapper = new QueryWrapper<WxUser>()
 				.eq(StringUtils.hasText(appid), "appid", appid)
                 .eq(StringUtils.hasText(openid), "openid", openid)
                 .like(StringUtils.hasText(nickname), "nickname", nickname)
 				.eq(StringUtils.hasText(city), "city", city)
-				.eq(StringUtils.hasText(qrSceneStr), "qrSceneStr", qrSceneStr)
-				.apply(StringUtils.hasText(tagId),"JSON_CONTAINS(tagid_list,{0})",tagId)
-        );
+				.eq(StringUtils.hasText(qrSceneStr), "qrSceneStr", qrSceneStr);
+		if (StringUtils.hasText(tagId)) {
+			String[] tagIds = tagId.split(",");
+			wrapper.and(w -> {
+				for (int i = 0; i < tagIds.length; i++) {
+					if (i == 0) {
+						w.apply("JSON_CONTAINS(tagid_list,{0})", tagIds[0]);
+					} else {
+						w.or().apply("JSON_CONTAINS(tagid_list,{0})", tagIds[i]);
+					}
+				}
+			});
+		}
+        return this.page(new Query<WxUser>().getPage(params), wrapper);
     }
 
     /**

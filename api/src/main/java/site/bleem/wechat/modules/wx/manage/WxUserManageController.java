@@ -4,8 +4,13 @@ import site.bleem.wechat.common.utils.PageUtils;
 import site.bleem.wechat.common.utils.R;
 import site.bleem.wechat.modules.wx.entity.WxUser;
 import site.bleem.wechat.modules.wx.service.WxUserService;
+import site.bleem.wechat.modules.wx.service.WxUserTagsService;
+import site.bleem.wechat.modules.wx.vo.WxUserVO;
+import com.alibaba.fastjson.JSONArray;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
+import me.chanjar.weixin.mp.bean.tag.WxUserTag;
 import org.apache.shiro.authz.annotation.RequiresPermissions;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
@@ -13,6 +18,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 
 /**
@@ -28,6 +34,8 @@ import java.util.Map;
 public class WxUserManageController {
     @Autowired
     private WxUserService userService;
+    @Autowired
+    private WxUserTagsService userTagsService;
 
     /**
      * 列表
@@ -35,9 +43,29 @@ public class WxUserManageController {
     @GetMapping("/list")
     @RequiresPermissions("wx:wxuser:list")
     @ApiOperation(value = "列表")
-    public R list(@CookieValue String appid,@RequestParam Map<String, Object> params) {
+    public R list(@CookieValue String appid,@RequestParam Map<String, Object> params) throws Exception {
         params.put("appid",appid);
-        PageUtils page = new PageUtils(userService.queryPage(params));
+        IPage<WxUser> queryPage = userService.queryPage(params);
+
+        Map<Long, String> tagNameById = userTagsService.getWxTags(appid).stream()
+                .collect(Collectors.toMap(WxUserTag::getId, WxUserTag::getName, (a, b) -> a));
+
+        List<WxUserVO> records = queryPage.getRecords().stream().map(user -> {
+            WxUserVO vo = new WxUserVO(user);
+            JSONArray tagidList = user.getTagidList();
+            if (tagidList != null) {
+                List<String> tagNames = tagidList.stream()
+                        .map(tagid -> tagNameById.get(((Number) tagid).longValue()))
+                        .filter(java.util.Objects::nonNull)
+                        .collect(Collectors.toList());
+                vo.setTagNames(tagNames);
+            }
+            return vo;
+        }).collect(Collectors.toList());
+
+        IPage<WxUserVO> voPage = queryPage.convert(user -> null);
+        voPage.setRecords(records);
+        PageUtils page = new PageUtils(voPage);
 
         return R.ok().put("page", page);
     }
