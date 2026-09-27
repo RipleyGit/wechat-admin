@@ -129,6 +129,13 @@ jobs:
             mv '$DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar' '$DEPLOY_PATH/wechat-admin.jar'
             systemctl restart wechat-admin
             systemctl is-active --quiet wechat-admin
+            for i in \$(seq 1 30); do
+              code=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18088/wx/deploy/webhook -X POST \
+                -H 'Content-Type: application/json' -H 'X-Webhook-Secret: x' -d '{}')
+              [ \"\$code\" != '000' ] && break
+              [ \$i -eq 30 ] && { echo 'service did not become ready in time'; exit 1; }
+              sleep 2
+            done
             rm -rf '$DEPLOY_PATH/.deploy/$RELEASE_ID'"
 
       - name: Notify success via WeChat
