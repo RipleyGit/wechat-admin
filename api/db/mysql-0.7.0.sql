@@ -287,21 +287,21 @@ DROP TABLE IF EXISTS `msg_reply_rule`;
 DROP TABLE IF EXISTS `wx_msg_reply_rule`;
 CREATE TABLE `wx_msg_reply_rule`  (
   `rule_id` int(11) NOT NULL AUTO_INCREMENT,
-  `appid` char(20) CHARACTER SET utf8 NULL DEFAULT '' COMMENT 'appid',
-  `rule_name` varchar(20) CHARACTER SET utf8 NOT NULL COMMENT '规则名称',
-  `match_value` varchar(200) CHARACTER SET utf8 NOT NULL COMMENT '匹配的关键词、事件等',
+  `appid` char(20) CHARACTER SET utf8mb4 NULL DEFAULT '' COMMENT 'appid',
+  `rule_name` varchar(20) CHARACTER SET utf8mb4 NOT NULL COMMENT '规则名称',
+  `match_value` varchar(200) CHARACTER SET utf8mb4 NOT NULL COMMENT '匹配的关键词、事件等',
   `exact_match` tinyint(1) NOT NULL DEFAULT 0 COMMENT '是否精确匹配',
-  `reply_type` varchar(20) CHARACTER SET utf8 NOT NULL DEFAULT '1' COMMENT '回复消息类型',
-  `reply_content` varchar(1024) CHARACTER SET utf8 NOT NULL COMMENT '回复消息内容',
+  `reply_type` varchar(20) CHARACTER SET utf8mb4 NOT NULL DEFAULT '1' COMMENT '回复消息类型',
+  `reply_content` varchar(1024) CHARACTER SET utf8mb4 NOT NULL COMMENT '回复消息内容',
   `status` tinyint(1) NOT NULL DEFAULT 1 COMMENT '规则是否有效',
-  `desc` varchar(255) CHARACTER SET utf8 NULL DEFAULT NULL COMMENT '备注说明',
+  `desc` varchar(255) CHARACTER SET utf8mb4 NULL DEFAULT NULL COMMENT '备注说明',
   `effect_time_start` time(0) NULL DEFAULT '00:00:00' COMMENT '生效起始时间',
   `effect_time_end` time(0) NULL DEFAULT '23:59:59' COMMENT '生效结束时间',
   `priority` int(3) UNSIGNED NULL DEFAULT 0 COMMENT '规则优先级',
   `update_time` datetime(0) NOT NULL DEFAULT CURRENT_TIMESTAMP(0) ON UPDATE CURRENT_TIMESTAMP(0) COMMENT '修改时间',
   PRIMARY KEY (`rule_id`) USING BTREE,
   INDEX `idx_appid`(`appid`) USING BTREE COMMENT 'appid'
-) ENGINE = InnoDB AUTO_INCREMENT = 1 CHARACTER SET = utf8 COMMENT = '自动回复规则' ROW_FORMAT = Dynamic;
+) ENGINE = InnoDB AUTO_INCREMENT = 1 CHARACTER SET = utf8mb4 COMMENT = '自动回复规则' ROW_FORMAT = Dynamic;
 
 -- ----------------------------
 -- Records of wx_msg_reply_rule

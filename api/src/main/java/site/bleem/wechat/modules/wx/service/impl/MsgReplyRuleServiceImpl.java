@@ -47,12 +47,12 @@ public class MsgReplyRuleServiceImpl extends ServiceImpl<MsgReplyRuleMapper, Msg
 
     @Override
     public boolean save(MsgReplyRule msgReplyRule) {
-        if (msgReplyRule.getRuleId() > 0) {
-            msgReplyRuleMapper.updateById(msgReplyRule);
-        } else {
-            msgReplyRuleMapper.insert(msgReplyRule);
+        // 新建时前端传 ruleId:null，Long 直接和 0 比较会拆箱 NPE
+        Long ruleId = msgReplyRule.getRuleId();
+        if (ruleId != null && ruleId > 0) {
+            return msgReplyRuleMapper.updateById(msgReplyRule) > 0;
         }
-        return false;
+        return msgReplyRuleMapper.insert(msgReplyRule) > 0;
     }
 
     /**
