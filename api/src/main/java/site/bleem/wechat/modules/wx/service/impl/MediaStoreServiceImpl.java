@@ -1,9 +1,12 @@
 package site.bleem.wechat.modules.wx.service.impl;
 
+import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import lombok.extern.slf4j.Slf4j;
+import me.chanjar.weixin.common.error.WxError;
+import me.chanjar.weixin.common.error.WxErrorException;
 import me.chanjar.weixin.mp.api.WxMpService;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.scheduling.annotation.Async;
@@ -16,7 +19,11 @@ import site.bleem.wechat.modules.wx.service.MediaStoreService;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FilterInputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.UUID;
@@ -29,6 +36,11 @@ import java.util.UUID;
 public class MediaStoreServiceImpl implements MediaStoreService {
     private static final DateTimeFormatter DATE_DIR = DateTimeFormatter.ofPattern("yyyyMMdd");
     private static final String DEFAULT_CONTENT_TYPE = "application/octet-stream";
+    /**
+     * 流式转存的大小上限。微信侧视频消息本身不超过 10MB，留一倍余量；
+     * 主要作用是防止响应异常时把部署机那点内存吃光
+     */
+    private static final long MAX_STREAM_BYTES = 20L * 1024 * 1024;
 
     private final MinioProperties properties;
     private final WxMpService wxMpService;
@@ -100,7 +112,21 @@ public class MediaStoreServiceImpl implements MediaStoreService {
         try {
             // 异步线程没有回调线程的 ThreadLocal，必须自己切
             wxMpService.switchoverTo(appid);
-            tmp = wxMpService.getMaterialService().mediaDownload(mediaId);
+            try {
+                tmp = wxMpService.getMaterialService().mediaDownload(mediaId);
+            } catch (WxErrorException e) {
+                // 视频的 /cgi-bin/media/get 不返回文件，返回的是一段含 video_url 的 JSON，
+                // 而 SDK 见到 JSON 响应就直接抛异常，真正的地址只能从异常里掏出来
+                String videoUrl = videoUrlOf(e);
+                if (!StringUtils.hasText(videoUrl)) {
+                    throw e;
+                }
+                String url = uploadFromUrl(appid, videoUrl);
+                if (url != null) {
+                    backfillUrl(msgId, url);
+                }
+                return;
+            }
             if (tmp == null || !tmp.exists()) {
                 log.warn("媒体下载为空，msgId={}, mediaId={}", msgId, mediaId);
                 return;
@@ -109,26 +135,152 @@ public class MediaStoreServiceImpl implements MediaStoreService {
             String ext = StringUtils.hasText(preferExt) ? preferExt.toLowerCase() : extOf(tmp.getName());
             logMagic(msgId, ext, tmp);
             String url = upload(appid, new FileInputStream(tmp), tmp.length(), contentTypeOf(ext), ext);
-            if (url == null) {
-                return;
+            if (url != null) {
+                backfillUrl(msgId, url);
             }
-            WxMsg msg = wxMsgMapper.selectById(msgId);
-            if (msg == null) {
-                log.warn("消息已不存在，放弃回填，msgId={}", msgId);
-                return;
-            }
-            JSONObject detail = msg.getDetail() == null ? new JSONObject() : msg.getDetail();
-            detail.put("url", url);
-            msg.setDetail(detail);
-            wxMsgMapper.updateById(msg);
-            log.info("入站媒体转存完成，msgId={}", msgId);
         } catch (Exception e) {
-            // 转存失败不影响消息本身，图片前端回退 picUrl
+            // 转存失败不影响消息本身，前端显示"转存中"占位
             log.error("入站媒体转存失败，msgId={}, mediaId={}", msgId, mediaId, e);
         } finally {
             if (tmp != null && tmp.exists() && !tmp.delete()) {
                 log.debug("临时文件删除失败：{}", tmp.getAbsolutePath());
             }
+        }
+    }
+
+    /**
+     * 从 SDK 抛出的异常里取视频真实地址
+     *
+     * 视频类 media_id 调下载接口拿到的是 {"video_url": "http://..."}，
+     * SDK 的 MediaDownloadRequestExecutor 见到 application/json 就无条件抛异常，
+     * 但原始响应体被保留在 WxError.json 里，所以地址还能捞回来。
+     * 不是视频（真的是报错）时返回 null，交回原来的异常处理。
+     */
+    private String videoUrlOf(WxErrorException e) {
+        WxError error = e.getError();
+        if (error == null || !StringUtils.hasText(error.getJson())) {
+            return null;
+        }
+        try {
+            return JSON.parseObject(error.getJson()).getString("video_url");
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    /**
+     * 直接把 HTTP 响应体流进对象存储，不落临时文件
+     *
+     * 部署机的 /tmp 是 tmpfs（内存盘），可用内存只剩一百多 MB 且没有 swap，
+     * 十几 MB 的视频写进去是实打实的 OOM 风险。这里流式转发，内存里只有 MinIO
+     * 客户端的分块缓冲。同时按 Content-Length 先挡一道，没有该头时用
+     * LimitedInputStream 边读边挡，避免被超大响应拖垮。
+     */
+    private String uploadFromUrl(String appid, String fileUrl) {
+        HttpURLConnection conn = null;
+        try {
+            conn = openFollowingRedirects(fileUrl);
+            if (conn == null) {
+                return null;
+            }
+            long size = conn.getContentLengthLong();
+            if (size > MAX_STREAM_BYTES) {
+                log.warn("媒体过大，跳过转存，size={} 上限={}", size, MAX_STREAM_BYTES);
+                return null;
+            }
+            InputStream in = new LimitedInputStream(conn.getInputStream(), MAX_STREAM_BYTES);
+            return upload(appid, in, size, contentTypeOf("mp4"), "mp4");
+        } catch (Exception e) {
+            log.error("拉取媒体失败", e);
+            return null;
+        } finally {
+            if (conn != null) {
+                conn.disconnect();
+            }
+        }
+    }
+
+    /**
+     * 打开连接并手工跟随跳转
+     *
+     * 微信给的 video_url 是 http，HttpURLConnection 的自动跳转不跨协议
+     * （http 跳 https 会被它悄悄放弃，只留一个 302 给调用方），所以自己跟。
+     * 返回可读的 2xx 连接，失败返回 null。
+     */
+    private HttpURLConnection openFollowingRedirects(String fileUrl) throws IOException {
+        String target = fileUrl;
+        for (int hop = 0; hop < 5; hop++) {
+            HttpURLConnection conn = (HttpURLConnection) new URL(target).openConnection();
+            conn.setInstanceFollowRedirects(false);
+            conn.setConnectTimeout(10_000);
+            conn.setReadTimeout(60_000);
+            int code = conn.getResponseCode();
+            if (code / 100 == 2) {
+                return conn;
+            }
+            String location = conn.getHeaderField("Location");
+            conn.disconnect();
+            if (code / 100 != 3 || !StringUtils.hasText(location)) {
+                log.warn("拉取媒体失败，HTTP {}", code);
+                return null;
+            }
+            // Location 可能是相对路径
+            target = new URL(new URL(target), location).toString();
+        }
+        log.warn("拉取媒体跳转次数过多，放弃");
+        return null;
+    }
+
+    /**
+     * 把转存后的地址写回消息的 detail
+     */
+    private void backfillUrl(Long msgId, String url) {
+        WxMsg msg = wxMsgMapper.selectById(msgId);
+        if (msg == null) {
+            log.warn("消息已不存在，放弃回填，msgId={}", msgId);
+            return;
+        }
+        JSONObject detail = msg.getDetail() == null ? new JSONObject() : msg.getDetail();
+        detail.put("url", url);
+        msg.setDetail(detail);
+        wxMsgMapper.updateById(msg);
+        log.info("入站媒体转存完成，msgId={}", msgId);
+    }
+
+    /**
+     * 读超过上限就抛，给没有 Content-Length 的响应兜底
+     */
+    private static class LimitedInputStream extends FilterInputStream {
+        private final long limit;
+        private long read;
+
+        LimitedInputStream(InputStream in, long limit) {
+            super(in);
+            this.limit = limit;
+        }
+
+        private void count(long n) throws IOException {
+            if (n <= 0) {
+                return;
+            }
+            read += n;
+            if (read > limit) {
+                throw new IOException("媒体超过 " + limit + " 字节上限");
+            }
+        }
+
+        @Override
+        public int read() throws IOException {
+            int b = super.read();
+            count(b == -1 ? 0 : 1);
+            return b;
+        }
+
+        @Override
+        public int read(byte[] b, int off, int len) throws IOException {
+            int n = super.read(b, off, len);
+            count(n);
+            return n;
         }
     }
 
@@ -204,6 +356,9 @@ public class MediaStoreServiceImpl implements MediaStoreService {
                 return "audio/amr";
             case "mp3":
                 return "audio/mpeg";
+            case "mp4":
+                // 浏览器 <video> 直接播，必须是这个类型，否则会被当成附件下载
+                return "video/mp4";
             default:
                 return DEFAULT_CONTENT_TYPE;
         }

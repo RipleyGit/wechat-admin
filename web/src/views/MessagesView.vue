@@ -54,14 +54,22 @@
             <div v-for="msg in timeline" :key="msg.id" :class="['bubble-row', msg.inOut === 1 ? 'out' : 'in']">
               <div class="bubble">
                 <template v-if="msg.msgType === 'text'">{{ msg.detail?.content }}</template>
-                <el-image
-                  v-else-if="msg.msgType === 'image'"
-                  :src="imageSrc(msg)"
-                  :preview-src-list="[imageSrc(msg)]"
-                  preview-teleported
-                  fit="cover"
-                  class="bubble-image"
-                />
+                <template v-else-if="msg.msgType === 'image'">
+                  <el-image
+                    v-if="mediaSrc(msg)"
+                    :src="mediaSrc(msg)"
+                    :preview-src-list="[mediaSrc(msg)]"
+                    preview-teleported
+                    fit="cover"
+                    class="bubble-image"
+                  />
+                  <span v-else class="media-pending">图片转存中…</span>
+                </template>
+                <!-- 视频同样只播自己转存的文件，微信的临时地址几天就失效 -->
+                <template v-else-if="msg.msgType === 'video' || msg.msgType === 'shortvideo'">
+                  <video v-if="mediaSrc(msg)" :src="mediaSrc(msg)" class="bubble-video" controls preload="metadata" />
+                  <span v-else class="media-pending">视频转存中…</span>
+                </template>
                 <!-- 语音：音频转存到对象存储后由前端解码播放，detail.url 为空说明还没转存好或 MinIO 未配置 -->
                 <VoiceBubble
                   v-else-if="msg.msgType === 'voice'"
@@ -162,9 +170,14 @@ function shortTime(value) {
     : `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-/** 转存成功用自己的 URL，失败回退微信的 picUrl */
-function imageSrc(msg) {
-  return msg.detail?.url || msg.detail?.picUrl || ''
+/**
+ * 只认自己转存到对象存储的 URL。
+ * 微信的 picUrl 有防盗链：浏览器带 Referer 去取时，返回的是一张
+ * "此图片来自微信公众平台 未经允许不可引用" 的占位图（实测 2.8KB，原图 500KB+）。
+ * 回退到 picUrl 会显示一张看起来正常的假图，比直接说"转存中"更误导人。
+ */
+function mediaSrc(msg) {
+  return msg.detail?.url || ''
 }
 
 // http 拦截器已经弹过错误提示了，这里只需要收住 reject，不然满控制台 unhandled rejection
@@ -188,6 +201,24 @@ async function loadMoreSessions() {
 }
 
 /**
+ * 入站媒体的转存是异步的：wx_msg 行先落库，detail.url 稍后才补上。
+ * 首次渲染时 url 往往还是空的，而轮询只追加新消息、从不回看老行，
+ * 所以那条消息会一直空着直到整页刷新。这里把已有行的 url 补回去。
+ */
+function patchMediaUrls(list) {
+  const incoming = new Map()
+  for (const m of list) {
+    if (m.detail?.url) incoming.set(m.id, m.detail.url)
+  }
+  if (!incoming.size) return
+  for (const m of timeline.value) {
+    if (m.detail && !m.detail.url && incoming.has(m.id)) {
+      m.detail.url = incoming.get(m.id)
+    }
+  }
+}
+
+/**
  * silent 用于轮询和发送后刷新：只把新消息接到末尾，不整体替换。
  * 整体替换会把"加载更早"翻出来的历史冲掉，滚动位置也会跳。
  */
@@ -201,6 +232,7 @@ async function loadTimeline({ silent = false } = {}) {
     if (openid !== activeOpenid.value) return
     const list = r.list || []
     if (silent && timeline.value.length) {
+      patchMediaUrls(list)
       const maxId = timeline.value.reduce((max, m) => (m.id > max ? m.id : max), 0)
       const fresh = list.filter((m) => m.id > maxId)
       if (!fresh.length) {
@@ -349,6 +381,8 @@ onUnmounted(() => {
 .bubble { max-width: 62%; padding: 9px 12px; border-radius: 8px; background: #fff; border: 1px solid #e8ecf3; font-size: 14px; line-height: 21px; word-break: break-word; white-space: pre-wrap; }
 .bubble-row.out .bubble { background: #d7f0e2; border-color: #c2e7d3; }
 .bubble-image { max-width: 220px; border-radius: 4px; }
+.bubble-video { max-width: 240px; max-height: 320px; border-radius: 4px; display: block; background: #000; }
+.media-pending { color: #a0aec0; font-size: 12px; }
 .bubble-time { font-size: 11px; }
 .composer { flex: 0 0 auto; border-top: 1px solid #e8ecf3; padding: 12px 18px; background: #fff; }
 .composer-actions { display: flex; align-items: center; gap: 10px; margin-top: 10px; }

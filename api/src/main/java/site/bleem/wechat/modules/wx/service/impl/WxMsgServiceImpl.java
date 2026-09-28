@@ -76,11 +76,12 @@ public class WxMsgServiceImpl extends ServiceImpl<WxMsgMapper, WxMsg> implements
     }
 
     /**
-     * 入站图片和语音转存到对象存储
+     * 入站图片、语音、视频转存到对象存储
      *
-     * mediaId 三天过期。图片还有 picUrl 兜底，语音在微信侧没有任何长期地址，
-     * 不转存的话过期后原始音频就永久没了，而识别文字又是空的（见 docs/fan-messaging.md），
-     * 那条消息就彻底不可恢复。所以语音必须存。
+     * mediaId 三天过期，过期后这几类消息在微信侧都没有可用的长期地址：
+     * 图片的 picUrl 有防盗链（浏览器带 Referer 去取只会拿到占位图），
+     * 语音和视频连地址都没有，而语音识别文字又是空的（见 docs/fan-messaging.md）。
+     * 不转存这些消息就彻底不可恢复，所以必须存。
      */
     private void tryTransferMedia(WxMsg msg) {
         if (msg.getInOut() != WxMsg.WxMsgInOut.IN || msg.getDetail() == null) {
@@ -89,15 +90,18 @@ public class WxMsgServiceImpl extends ServiceImpl<WxMsgMapper, WxMsg> implements
         String msgType = msg.getMsgType();
         boolean isImage = WxConsts.XmlMsgType.IMAGE.equals(msgType);
         boolean isVoice = WxConsts.XmlMsgType.VOICE.equals(msgType);
-        if (!isImage && !isVoice) {
+        // 小视频和视频在下载接口上没有区别，都走 video_url
+        boolean isVideo = WxConsts.XmlMsgType.VIDEO.equals(msgType)
+                || WxConsts.XmlMsgType.SHORTVIDEO.equals(msgType);
+        if (!isImage && !isVoice && !isVideo) {
             return;
         }
         String mediaId = msg.getDetail().getString("mediaId");
         if (!StringUtils.hasText(mediaId)) {
             return;
         }
-        // 语音用微信给的 format（amr），比下载响应头推断可靠
-        String preferExt = isVoice ? msg.getDetail().getString("format") : null;
+        // 语音用微信给的 format（amr），视频固定 mp4，都比下载响应头推断可靠
+        String preferExt = isVoice ? msg.getDetail().getString("format") : (isVideo ? "mp4" : null);
         mediaStoreService.transferInboundMediaAsync(msg.getId(), msg.getAppid(), mediaId, preferExt);
     }
 }
