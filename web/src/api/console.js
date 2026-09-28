@@ -35,4 +35,13 @@ export const api = {
   msgMarkRead: (data) => http.post('/manage/wxMsg/read', data),
   msgUnreadCount: () => http.get('/manage/wxMsg/unread-count'),
   sendMsg: (data) => http.post('/manage/wxMsg/send', data),
+  notifyChannels: (params) => http.get('/manage/notifyChannel/list', { params }),
+  saveNotifyChannel: (data) => http.post('/manage/notifyChannel/save', data),
+  updateNotifyChannel: (data) => http.post('/manage/notifyChannel/update', data),
+  deleteNotifyChannels: (ids) => http.post('/manage/notifyChannel/delete', ids),
+  regenerateNotifySecret: (id) => http.post(`/manage/notifyChannel/regenerateSecret/${id}`),
+  closeNotifyGateway: (id) => http.post(`/manage/notifyChannel/closeGateway/${id}`),
+  previewNotify: (data) => http.post('/manage/notifyChannel/preview', data),
+  sendNotify: (data) => http.post('/manage/notifyChannel/send', data),
+  notifyLogs: (params) => http.get('/manage/notifyChannel/logs', { params }),
 }

@@ -28,7 +28,7 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { ArrowDown, ChatDotRound, ChatLineRound, Grid, Picture, Promotion, PriceTag, Tickets, User, UserFilled } from '@element-plus/icons-vue'
+import { ArrowDown, BellFilled, ChatDotRound, ChatLineRound, Grid, Picture, Promotion, PriceTag, Tickets, User, UserFilled } from '@element-plus/icons-vue'
 import { api } from '@/api/console'
 import { session } from '@/lib/session'
 
@@ -48,6 +48,7 @@ const nav = [
   { label: '粉丝私信', to: '/messages', icon: ChatLineRound, badge: true },
   { label: '自动回复', to: '/replies', icon: ChatDotRound },
   { label: '渠道二维码', to: '/qrcodes', icon: Tickets },
+  { label: '消息推送', to: '/notify', icon: BellFilled },
 ]
 
 /**

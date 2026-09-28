@@ -160,6 +160,12 @@ INSERT INTO `sys_menu` VALUES (119, 118, '查看', NULL, 'wx:wxaccount:list,wx:w
 INSERT INTO `sys_menu` VALUES (120, 118, '新增', NULL, 'wx:wxaccount:save', 2, NULL, 6);
 INSERT INTO `sys_menu` VALUES (121, 118, '修改', NULL, 'wx:wxaccount:update', 2, NULL, 6);
 INSERT INTO `sys_menu` VALUES (122, 118, '删除', NULL, 'wx:wxaccount:delete', 2, NULL, 6);
+INSERT INTO `sys_menu` VALUES (123, 6, '消息推送', 'wx/notify', NULL, 1, 'config', 6);
+INSERT INTO `sys_menu` VALUES (124, 123, '查看', NULL, 'wx:notifychannel:list,wx:notifychannel:info', 2, NULL, 6);
+INSERT INTO `sys_menu` VALUES (125, 123, '新增', NULL, 'wx:notifychannel:save', 2, NULL, 6);
+INSERT INTO `sys_menu` VALUES (126, 123, '修改', NULL, 'wx:notifychannel:update', 2, NULL, 6);
+INSERT INTO `sys_menu` VALUES (127, 123, '删除', NULL, 'wx:notifychannel:delete', 2, NULL, 6);
+INSERT INTO `sys_menu` VALUES (128, 123, '发送', NULL, 'wx:notifychannel:send', 2, NULL, 6);
 
 -- ----------------------------
 -- Table structure for sys_oss
