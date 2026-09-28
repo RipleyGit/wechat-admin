@@ -23,9 +23,11 @@ public class ScanHandler extends AbstractHandler {
     public WxMpXmlOutMessage handle(WxMpXmlMessage wxMpXmlMessage, Map<String, Object> map,
                                     WxMpService wxMpService, WxSessionManager wxSessionManager) {
         //扫码事件处理
-        this.logger.info("用户扫描带参二维码 OPENID: " + wxMpXmlMessage.getFromUser());
+        // SCAN 事件的 EventKey 本来就是裸场景值，这里走 extractQrScene 只是和 SubscribeHandler 保持一致
+        String scene = extractQrScene(wxMpXmlMessage.getEventKey());
+        this.logger.info("用户扫描带参二维码 OPENID: " + wxMpXmlMessage.getFromUser() + "，场景值：" + scene);
         String appid = WxMpConfigStorageHolder.get();
-        msgReplyService.tryAutoReply(appid, true, wxMpXmlMessage.getFromUser(), wxMpXmlMessage.getEventKey());
+        msgReplyService.tryAutoReply(appid, true, wxMpXmlMessage.getFromUser(), scene);
 
         return null;
     }

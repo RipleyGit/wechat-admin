@@ -63,9 +63,29 @@ public class WxUser implements Serializable {
             this.remark=wxMpUser.getRemark();
             this.tagidList=JSONArray.parseArray(JSONObject.toJSONString(wxMpUser.getTagIds()));
             this.subscribeScene=wxMpUser.getSubscribeScene();
-            String qrScene =  wxMpUser.getQrScene();
-            this.qrSceneStr= !StringUtils.hasText(qrScene) ? wxMpUser.getQrSceneStr() : qrScene;
+            this.qrSceneStr= resolveQrScene(wxMpUser.getQrSceneStr(), wxMpUser.getQrScene());
         }
+    }
+
+    /**
+     * 取扫码关注的场景值
+     * <p>
+     * 微信 user/info 会同时返回 qr_scene（整型 scene_id）和 qr_scene_str（字符串 scene_str），
+     * 一次只有一个是真的：用 scene_str 建的码，qr_scene 固定回 0。
+     * 所以优先取 scene_str，并且把 "0" 当成"没有场景值"，否则渠道来源会全部退化成 0。
+     *
+     * @param qrSceneStr 字符串场景值
+     * @param qrScene    整型场景值，微信以字符串形式返回
+     * @return 场景值，都没有则返回 null
+     */
+    private static String resolveQrScene(String qrSceneStr, String qrScene) {
+        if (StringUtils.hasText(qrSceneStr)) {
+            return qrSceneStr;
+        }
+        if (StringUtils.hasText(qrScene) && !"0".equals(qrScene.trim())) {
+            return qrScene;
+        }
+        return null;
     }
 
     public WxUser(WxOAuth2UserInfo wxMpUser, String appid) {

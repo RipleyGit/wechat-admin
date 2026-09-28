@@ -36,7 +36,10 @@ public class SubscribeHandler extends AbstractHandler {
         msgReplyService.tryAutoReply(appid, true, wxMessage.getFromUser(), wxMessage.getEvent());
 
         if (StringUtils.hasText(wxMessage.getEventKey())) {// 处理特殊事件，如用户扫描带参二维码关注
-            msgReplyService.tryAutoReply(appid, true, wxMessage.getFromUser(), wxMessage.getEventKey());
+            // 扫码关注的 EventKey 带 qrscene_ 前缀，剥掉后才能和 SCAN 事件用同一条规则
+            String scene = extractQrScene(wxMessage.getEventKey());
+            this.logger.info("扫码关注，场景值：{}", scene);
+            msgReplyService.tryAutoReply(appid, true, wxMessage.getFromUser(), scene);
         }
         return null;
     }
@@ -51,7 +54,7 @@ public class SubscribeHandler extends AbstractHandler {
         userService.refreshUserInfo(wxMessage.getFromUser(),appid);
         msgReplyService.tryAutoReply(appid, true, wxMessage.getFromUser(), wxMessage.getEvent());
         if (StringUtils.hasText(wxMessage.getEventKey())) {
-            msgReplyService.tryAutoReply(appid, true, wxMessage.getFromUser(), wxMessage.getEventKey());
+            msgReplyService.tryAutoReply(appid, true, wxMessage.getFromUser(), extractQrScene(wxMessage.getEventKey()));
         }
         return null;
     }
