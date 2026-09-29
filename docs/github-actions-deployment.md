@@ -2,7 +2,8 @@
 
 The workflow in `.github/workflows/deploy.yml` builds the Vue application and the Java 8 API
 on GitHub-hosted runners. Pull requests run the build only. A push to `main` uploads a release
-to the server, switches the active frontend and JAR symlinks, then restarts `wechat-admin`.
+to the server, moves it into the stable `web/` and `wechat-admin.jar` paths (keeping `.previous`
+copies), then restarts `wechat-admin`.
 
 ## Server prerequisites
 
@@ -56,9 +57,13 @@ Create a repository environment named `production`, then add the following envir
 | `DEPLOY_PATH` | `/opt/wechat-admin` |
 | `DEPLOY_SSH_PRIVATE_KEY` | Private key for the deployment user |
 | `DEPLOY_KNOWN_HOSTS` | Output from `ssh-keyscan -p <port> <host>` |
+| `NOTIFY_SECRET` | 公众号的推送密钥：后台「编辑公众号配置 → 推送密钥」生成后复制过来 |
 
 The public half of `DEPLOY_SSH_PRIVATE_KEY` must be added to the deployment user's
 `~/.ssh/authorized_keys` on the server.
+
+`NOTIFY_SECRET` 只影响部署完成后的微信通知，不影响部署本身。在后台刷新推送密钥后要同步更新这里，
+否则通知步骤会在 run 页面上打出 `::warning::部署通知未发出：invalid notify secret`。
 
 ## Release behavior
 

@@ -1,6 +1,7 @@
 package site.bleem.wechat.modules.wx.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.baomidou.mybatisplus.extension.toolkit.SqlHelper;
@@ -20,6 +21,7 @@ import org.springframework.util.Assert;
 import org.springframework.util.StringUtils;
 
 import javax.annotation.PostConstruct;
+import java.security.SecureRandom;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -28,6 +30,12 @@ import java.util.Map;
 @Service("wxAccountService")
 @Slf4j
 public class WxAccountServiceImpl extends ServiceImpl<WxAccountMapper, WxAccount> implements WxAccountService {
+
+    /**
+     * 推送密钥 24 字节随机数，十六进制后 48 位
+     */
+    private static final int NOTIFY_SECRET_BYTES = 24;
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     @Autowired
     private WxMpService wxMpService;
@@ -67,6 +75,28 @@ public class WxAccountServiceImpl extends ServiceImpl<WxAccountMapper, WxAccount
         log.info(" saveOrUpdate {} appid: {} ", saveOrUpdate, entity.getAppid());
         this.addAccountToRuntime(entity);
         return saveOrUpdate;
+    }
+
+    @Override
+    public WxAccount getByNotifySecret(String notifySecret) {
+        // 长度不对的直接挡掉，不为明显错误的值查库
+        if (!StringUtils.hasText(notifySecret) || notifySecret.length() != NOTIFY_SECRET_BYTES * 2) {
+            return null;
+        }
+        return this.getOne(new QueryWrapper<WxAccount>().eq("notify_secret", notifySecret).last("LIMIT 1"));
+    }
+
+    @Override
+    public String regenerateNotifySecret(String appid) {
+        byte[] bytes = new byte[NOTIFY_SECRET_BYTES];
+        SECURE_RANDOM.nextBytes(bytes);
+        StringBuilder secret = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) {
+            secret.append(String.format("%02x", b));
+        }
+        // 只改这一列，不走 saveOrUpdateWxAccount：推送密钥和微信运行时配置无关，不用重新注册账号
+        this.update(new UpdateWrapper<WxAccount>().eq("appid", appid).set("notify_secret", secret.toString()));
+        return secret.toString();
     }
 
     @Override

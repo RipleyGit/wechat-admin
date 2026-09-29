@@ -33,13 +33,11 @@
         <el-table-column label="文案来源" width="100">
           <template #default="{ row }">{{ row.contentMode === 'passthrough' ? '调用方传入' : '通道模板' }}</template>
         </el-table-column>
-        <el-table-column label="网关" min-width="200">
+        <el-table-column label="接口调用" width="100">
           <template #default="{ row }">
-            <template v-if="row.secret">
-              <span class="mono secret">{{ row.secret }}</span>
-              <el-button link type="primary" @click="copySecret(row)">复制</el-button>
-            </template>
-            <el-tag v-else size="small" type="info">未开放</el-tag>
+            <el-tag size="small" :type="row.gatewayEnabled ? 'success' : 'info'">
+              {{ row.gatewayEnabled ? '允许' : '未开放' }}
+            </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="状态" width="80">
@@ -56,8 +54,6 @@
               <el-button link type="primary">更多<el-icon><ArrowDown /></el-icon></el-button>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <el-dropdown-item command="secret">{{ row.secret ? '重置网关密钥' : '开放网关' }}</el-dropdown-item>
-                  <el-dropdown-item v-if="row.secret" command="close">关闭网关</el-dropdown-item>
                   <el-dropdown-item command="curl">复制 curl 示例</el-dropdown-item>
                   <el-dropdown-item command="delete" divided>删除通道</el-dropdown-item>
                 </el-dropdown-menu>
@@ -147,6 +143,13 @@
         <el-form-item label="启用">
           <el-switch v-model="form.enabled" />
           <span class="hint inline">停用后网关会返回 skipped，手动也发不了</span>
+        </el-form-item>
+        <el-form-item label="允许接口调用">
+          <el-switch v-model="form.gatewayEnabled" />
+          <div class="hint">
+            外部系统带上公众号的推送密钥（在「编辑公众号配置」里生成）才能调用网关。
+            同一个公众号的通道共用这个密钥，只有打开这里的通道才会被触发；不影响在页面上手动发送
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -266,6 +269,7 @@ function edit(row) {
     templateUrl: '',
     remark: '',
     enabled: true,
+    gatewayEnabled: false,
   }, row)
   templateDataText.value = form.templateData ? JSON.stringify(form.templateData, null, 2) : ''
   previewText.value = null
@@ -311,16 +315,7 @@ async function preview() {
 }
 
 async function moreAction(command, row) {
-  if (command === 'secret') {
-    const r = await api.regenerateNotifySecret(row.id)
-    await copy(r.secret, '密钥已重置并复制到剪贴板')
-    load()
-  } else if (command === 'close') {
-    await ElMessageBox.confirm('关闭后网关会对这个通道返回 401，正在调用的机器会推送失败，只能在页面上手动发。', '关闭网关', { type: 'warning' })
-    await api.closeNotifyGateway(row.id)
-    ElMessage.success('网关已关闭')
-    load()
-  } else if (command === 'curl') {
+  if (command === 'curl') {
     copyCurl(row)
   } else if (command === 'delete') {
     await ElMessageBox.confirm(`删除通道「${row.name}」后，调用这个地址的机器会推送失败。`, '删除通道', { type: 'warning' })
@@ -330,14 +325,14 @@ async function moreAction(command, row) {
   }
 }
 
-function copySecret(row) {
-  copy(row.secret, '密钥已复制')
-}
-
-/** 给调用方直接抄的命令，省得对着文档拼请求头 */
+/**
+ * 给调用方直接抄的命令，省得对着文档拼请求头
+ *
+ * 密钥用占位符：推送密钥在公众号配置里管，这个页面不去取它
+ */
 function copyCurl(row) {
-  if (!row.secret) {
-    ElMessage.warning('这个通道还没开放网关，先重置密钥')
+  if (!row.gatewayEnabled) {
+    ElMessage.warning('这个通道还没允许接口调用，先在编辑里打开')
     return
   }
   const body = row.contentMode === 'passthrough'
@@ -345,7 +340,7 @@ function copyCurl(row) {
     : JSON.stringify(row.lastPayload || { title: '标题', body: '正文' })
   const cmd = [
     `curl -X POST ${origin}/wx/notify/${row.code} \\`,
-    `  -H 'X-Notify-Secret: ${row.secret}' \\`,
+    `  -H 'X-Notify-Secret: <公众号推送密钥>' \\`,
     `  -H 'Content-Type: application/json' \\`,
     `  -d '${body}'`,
   ].join('\n')
@@ -435,7 +430,6 @@ onMounted(() => {
 <style scoped>
 .head-actions { display: flex; gap: 10px; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-.secret { color: #5a6a86; }
 .muted { color: #97a1b4; font-size: 12px; margin-right: 4px; }
 .hint { color: #97a1b4; font-size: 12px; line-height: 1.6; margin-top: 4px; width: 100%; }
 .hint.warn { color: #d08700; }

@@ -12,6 +12,7 @@ public class WxAccountConfigView {
     private boolean secretConfigured;
     private boolean tokenConfigured;
     private boolean aesKeyConfigured;
+    private boolean notifySecretConfigured;
 
     public static WxAccountConfigView from(WxAccount account) {
         WxAccountConfigView view = new WxAccountConfigView();
@@ -22,6 +23,7 @@ public class WxAccountConfigView {
         view.setSecretConfigured(account.getSecret() != null && !account.getSecret().trim().isEmpty());
         view.setTokenConfigured(account.getToken() != null && !account.getToken().trim().isEmpty());
         view.setAesKeyConfigured(account.getAesKey() != null && !account.getAesKey().trim().isEmpty());
+        view.setNotifySecretConfigured(account.getNotifySecret() != null && !account.getNotifySecret().isEmpty());
         return view;
     }
 }

@@ -131,19 +131,21 @@ jobs:
             systemctl is-active --quiet wechat-admin
             ready=0
             for i in \$(seq 1 30); do
-              code=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18088/wx/deploy/webhook -X POST \
-                -H 'Content-Type: application/json' -H 'X-Webhook-Secret: x' -d '{}' || true)
+              code=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18088/wx/notify/deploy-success -X POST \
+                -H 'Content-Type: application/json' -H 'X-Notify-Secret: x' -d '{}' || true)
               if [ \"\$code\" != '000' ] && [ -n \"\$code\" ]; then ready=1; break; fi
               sleep 2
             done
             [ \"\$ready\" -eq 1 ] || { echo 'service did not become ready in time'; exit 1; }
             rm -rf '$DEPLOY_PATH/.deploy/$RELEASE_ID'"
 
+      # 通知走通用推送网关：请求头里的公众号推送密钥决定发到哪个公众号，
+      # 地址里的通道标识决定用哪套收件人和文案（在后台「消息推送」页面配置）
       - name: Notify success via WeChat
         if: success()
         continue-on-error: true
         env:
-          DEPLOY_WEBHOOK_SECRET: ${{ secrets.DEPLOY_WEBHOOK_SECRET }}
+          NOTIFY_SECRET: ${{ secrets.NOTIFY_SECRET }}
           COMMIT_MSG: ${{ github.event.head_commit.message }}
           ACTOR: ${{ github.actor }}
           BRANCH: ${{ github.ref_name }}
@@ -152,39 +154,49 @@ jobs:
           python3 - <<'PYEOF'
           import os, json, urllib.request, urllib.error, datetime
           deploy_time = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
-          commit_msg = os.environ.get('COMMIT_MSG', '').splitlines()[0]
+          commit_msg = (os.environ.get('COMMIT_MSG') or '').split('\n', 1)[0].strip()
           payload = json.dumps({
               "branch": os.environ.get('BRANCH', ''),
               "commit_msg": commit_msg,
+              "commit_short": commit_msg[:20] + '…' if len(commit_msg) > 20 else commit_msg,
               "actor": os.environ.get('ACTOR', ''),
-              "status": "success",
               "run_url": os.environ.get('RUN_URL', ''),
               "deploy_time": deploy_time,
           }, ensure_ascii=False).encode('utf-8')
           req = urllib.request.Request(
-              'https://wechat.bleem.site/wx/deploy/webhook',
+              'https://wechat.bleem.site/wx/notify/deploy-success',
               data=payload,
               headers={
                   'Content-Type': 'application/json; charset=utf-8',
-                  'X-Webhook-Secret': os.environ.get('DEPLOY_WEBHOOK_SECRET', '').strip(),
+                  'X-Notify-Secret': os.environ.get('NOTIFY_SECRET', '').strip(),
               },
               method='POST',
           )
           try:
               with urllib.request.urlopen(req) as resp:
-                  print('Deploy webhook response:', resp.read().decode('utf-8'))
+                  body = resp.read().decode('utf-8')
+                  print('Notify response:', body)
+                  # 网关的业务错误是 HTTP 200 + JSON 里的 code，要看 code 才知道发没发出去；
+                  # code=200 但一个都没发成功（没匹配到收件人、超出 48 小时窗口等）也要提示
+                  result = json.loads(body)
+                  if result.get('code') != 200:
+                      print(f"::warning::部署通知未发出：{result.get('msg')}")
+                  elif result.get('skipped'):
+                      print('::warning::部署通知通道已停用，未发送')
+                  elif not result.get('successCount') or result.get('failCount'):
+                      print(f"::warning::部署通知成功 {result.get('successCount')}/{result.get('recipientCount')}：{result.get('errorMsg') or ''}")
           except urllib.error.HTTPError as e:
-              print(f'Deploy webhook HTTP error: {e.code} {e.reason}')
+              print(f'::warning::部署通知 HTTP 错误：{e.code} {e.reason}')
               print('Response body:', e.read().decode('utf-8', errors='replace'))
           except Exception as e:
-              print(f'Deploy webhook error: {e}')
+              print(f'::warning::部署通知失败：{e}')
           PYEOF
 
       - name: Notify failure via WeChat
         if: failure() || cancelled()
         continue-on-error: true
         env:
-          DEPLOY_WEBHOOK_SECRET: ${{ secrets.DEPLOY_WEBHOOK_SECRET }}
+          NOTIFY_SECRET: ${{ secrets.NOTIFY_SECRET }}
           COMMIT_MSG: ${{ github.event.head_commit.message }}
           ACTOR: ${{ github.actor }}
           BRANCH: ${{ github.ref_name }}
@@ -196,9 +208,9 @@ jobs:
           STEP_ACTIVATE: ${{ steps.activate.outcome }}
         run: |
           python3 - <<'PYEOF'
-          import os, json, urllib.request, datetime
+          import os, json, urllib.request, urllib.error, datetime
           deploy_time = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
-          commit_msg = os.environ.get('COMMIT_MSG', '').splitlines()[0]
+          commit_msg = (os.environ.get('COMMIT_MSG') or '').split('\n', 1)[0].strip()
           step_map = {
               'STEP_DOWNLOAD_WEB':   ('下载前端构件', ''),
               'STEP_DOWNLOAD_API':   ('下载后端构件', ''),
@@ -216,27 +228,35 @@ jobs:
           payload = json.dumps({
               "branch": os.environ.get('BRANCH', ''),
               "commit_msg": commit_msg,
+              "commit_short": commit_msg[:20] + '…' if len(commit_msg) > 20 else commit_msg,
               "actor": os.environ.get('ACTOR', ''),
-              "status": "failure",
               "run_url": os.environ.get('RUN_URL', ''),
               "deploy_time": deploy_time,
               "failed_step": failed_step,
           }, ensure_ascii=False).encode('utf-8')
           req = urllib.request.Request(
-              'https://wechat.bleem.site/wx/deploy/webhook',
+              'https://wechat.bleem.site/wx/notify/deploy-failure',
               data=payload,
               headers={
                   'Content-Type': 'application/json; charset=utf-8',
-                  'X-Webhook-Secret': os.environ.get('DEPLOY_WEBHOOK_SECRET', '').strip(),
+                  'X-Notify-Secret': os.environ.get('NOTIFY_SECRET', '').strip(),
               },
               method='POST',
           )
           try:
               with urllib.request.urlopen(req) as resp:
-                  print('Deploy webhook response:', resp.read().decode('utf-8'))
+                  body = resp.read().decode('utf-8')
+                  print('Notify response:', body)
+                  result = json.loads(body)
+                  if result.get('code') != 200:
+                      print(f"::warning::部署通知未发出：{result.get('msg')}")
+                  elif result.get('skipped'):
+                      print('::warning::部署通知通道已停用，未发送')
+                  elif not result.get('successCount') or result.get('failCount'):
+                      print(f"::warning::部署通知成功 {result.get('successCount')}/{result.get('recipientCount')}：{result.get('errorMsg') or ''}")
           except urllib.error.HTTPError as e:
-              print(f'Deploy webhook HTTP error: {e.code} {e.reason}')
+              print(f'::warning::部署通知 HTTP 错误：{e.code} {e.reason}')
               print('Response body:', e.read().decode('utf-8', errors='replace'))
           except Exception as e:
-              print(f'Deploy webhook error: {e}')
+              print(f'::warning::部署通知失败：{e}')
           PYEOF

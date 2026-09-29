@@ -52,6 +52,10 @@ public class WxAccount implements Serializable {
 	 * aesKey
 	 */
 	private String aesKey;
+	/**
+	 * 推送网关密钥，对应请求头 X-Notify-Secret，由系统生成，和微信那边的配置无关
+	 */
+	private String notifySecret;
 
 	public WxMpDefaultConfigImpl toWxMpConfigStorage(){
 		WxMpDefaultConfigImpl configStorage = new WxMpDefaultConfigImpl();

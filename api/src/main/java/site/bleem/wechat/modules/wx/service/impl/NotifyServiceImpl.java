@@ -71,11 +71,14 @@ public class NotifyServiceImpl extends ServiceImpl<NotifyChannelMapper, NotifyCh
     }
 
     @Override
-    public NotifyChannel getByCode(String code) {
-        if (!StringUtils.hasText(code)) {
+    public NotifyChannel getByCode(String appid, String code) {
+        if (!StringUtils.hasText(appid) || !StringUtils.hasText(code)) {
             return null;
         }
-        return this.getOne(new QueryWrapper<NotifyChannel>().eq("code", code).last("LIMIT 1"));
+        return this.getOne(new QueryWrapper<NotifyChannel>()
+                .eq("appid", appid)
+                .eq("code", code)
+                .last("LIMIT 1"));
     }
 
     @Override

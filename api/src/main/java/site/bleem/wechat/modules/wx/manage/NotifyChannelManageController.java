@@ -2,7 +2,6 @@ package site.bleem.wechat.modules.wx.manage;
 
 import java.util.Arrays;
 import java.util.Map;
-import java.util.UUID;
 
 import com.alibaba.fastjson.JSONObject;
 import io.swagger.annotations.Api;
@@ -23,6 +22,7 @@ import site.bleem.wechat.modules.wx.service.NotifyService;
  *
  * 网关入口在 NotifyGatewayController（/notify/**，不走登录拦截）。
  * 这里是配置和手动发，都在 /manage/** 下面，走 Shiro。
+ * 推送密钥是公众号级的，在公众号配置里生成，见 WxAccountConfigController。
  */
 @RestController
 @RequestMapping("/manage/notifyChannel")
@@ -70,7 +70,7 @@ public class NotifyChannelManageController {
         if (invalid != null) {
             return invalid;
         }
-        if (notifyService.getByCode(channel.getCode()) != null) {
+        if (notifyService.getByCode(appid, channel.getCode()) != null) {
             return R.error("通道标识[" + channel.getCode() + "]已存在");
         }
         normalize(channel);
@@ -91,13 +91,15 @@ public class NotifyChannelManageController {
             return R.error("通道不存在");
         }
         channel.setAppid(appid);
+        // code 是网关地址的一部分，改了等于换地址，调用方那边会静默失败，不给改
+        channel.setCode(exists.getCode());
+        // 没传的字段沿用库里的值，不能拿新建时的默认值去填：
+        // 否则一个不带 enabled 的请求会把停用的通道重新启用，不带 gatewayEnabled 会把网关关掉
+        keepUnset(channel, exists);
         R invalid = validate(channel);
         if (invalid != null) {
             return invalid;
         }
-        // code 是网关地址的一部分，改了等于换地址，调用方那边会静默 401，不给改
-        channel.setCode(exists.getCode());
-        normalize(channel);
         notifyService.updateById(channel);
 
         return R.ok();
@@ -116,50 +118,6 @@ public class NotifyChannelManageController {
             }
         }
         notifyService.removeByIds(Arrays.asList(ids));
-
-        return R.ok();
-    }
-
-    /**
-     * 重置网关密钥
-     *
-     * 密钥明文只在列表里展示，没有单独的「查看」接口——调用方那边要配一份，藏起来没意义。
-     */
-    @PostMapping("/regenerateSecret/{id}")
-    @RequiresPermissions("wx:notifychannel:update")
-    @ApiOperation(value = "重置网关密钥")
-    public R regenerateSecret(@CookieValue String appid, @PathVariable("id") Long id) {
-        NotifyChannel exists = notifyService.getById(id);
-        if (!belongsTo(exists, appid)) {
-            return R.error("通道不存在");
-        }
-        String secret = UUID.randomUUID().toString().replace("-", "");
-        NotifyChannel patch = new NotifyChannel();
-        patch.setId(id);
-        patch.setSecret(secret);
-        notifyService.updateById(patch);
-
-        return R.ok().put("secret", secret);
-    }
-
-    /**
-     * 关闭网关
-     *
-     * 写空串而不是 NULL：网关那边用 StringUtils.hasText 判断，两者等价，
-     * 但列表里统一显示成空能少一个 null 分支。
-     */
-    @PostMapping("/closeGateway/{id}")
-    @RequiresPermissions("wx:notifychannel:update")
-    @ApiOperation(value = "关闭网关")
-    public R closeGateway(@CookieValue String appid, @PathVariable("id") Long id) {
-        NotifyChannel exists = notifyService.getById(id);
-        if (!belongsTo(exists, appid)) {
-            return R.error("通道不存在");
-        }
-        NotifyChannel patch = new NotifyChannel();
-        patch.setId(id);
-        patch.setSecret("");
-        notifyService.updateById(patch);
 
         return R.ok();
     }
@@ -272,15 +230,34 @@ public class NotifyChannelManageController {
         return null;
     }
 
+    private void keepUnset(NotifyChannel channel, NotifyChannel exists) {
+        if (channel.getEnabled() == null) {
+            channel.setEnabled(exists.getEnabled());
+        }
+        if (channel.getGatewayEnabled() == null) {
+            channel.setGatewayEnabled(exists.getGatewayEnabled());
+        }
+        if (!StringUtils.hasText(channel.getSendType())) {
+            channel.setSendType(exists.getSendType());
+        }
+        if (!StringUtils.hasText(channel.getRecipientType())) {
+            channel.setRecipientType(exists.getRecipientType());
+        }
+        if (!StringUtils.hasText(channel.getContentMode())) {
+            channel.setContentMode(exists.getContentMode());
+        }
+    }
+
     /**
-     * 补默认值
+     * 新建时补默认值
      *
      * 页面上没填的字段不能留 NULL：这几列在库里是 NOT NULL，
      * 而且严格模式下 INSERT 会直接失败。
      */
     private void normalize(NotifyChannel channel) {
-        if (channel.getSecret() == null) {
-            channel.setSecret("");
+        // 默认不开放网关：同一个公众号的通道共用推送密钥，新通道要显式打开才能被外部触发
+        if (channel.getGatewayEnabled() == null) {
+            channel.setGatewayEnabled(false);
         }
         if (channel.getEnabled() == null) {
             channel.setEnabled(true);

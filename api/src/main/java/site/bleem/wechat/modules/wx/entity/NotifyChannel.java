@@ -13,8 +13,8 @@ import java.util.Date;
 /**
  * 消息推送通道
  *
- * 一个通道对应一个事件，自带收件人和文案。外部机器 POST /wx/notify/{code} 触发，
- * 页面上也能手动发同一个通道。
+ * 一个通道对应一个事件，自带收件人和文案。外部机器带着公众号的推送密钥
+ * POST /wx/notify/{code} 触发，页面上也能手动发同一个通道。
  */
 @Data
 @TableName("wx_notify_channel")
@@ -32,16 +32,17 @@ public class NotifyChannel implements Serializable {
     private Long id;
     private String appid;
     /**
-     * 通道标识，网关地址用它
+     * 通道标识，网关地址用它，在公众号内唯一
      */
     private String code;
     @TableField("`name`")
     private String name;
-    /**
-     * 网关鉴权密钥，为空表示不开放网关，只能页面手动发
-     */
-    private String secret;
     private Boolean enabled;
+    /**
+     * 是否允许网关触发。公众号下所有通道共用一个推送密钥，
+     * 这个开关决定拿到密钥的调用方能触发哪些通道
+     */
+    private Boolean gatewayEnabled;
     /**
      * kefu / template
      */

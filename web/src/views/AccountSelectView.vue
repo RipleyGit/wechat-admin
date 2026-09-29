@@ -42,7 +42,7 @@
   <el-drawer v-model="drawerOpen" :title="editing ? '编辑公众号配置' : '接入公众号'" direction="rtl" size="560px" destroy-on-close>
     <el-form :model="form" label-position="top" @submit.prevent>
       <el-alert type="info" :closable="false" show-icon>
-        <template #title>密钥仅在保存时提交，不会在页面再次显示。</template>
+        <template #title>AppSecret、Token 和 AES Key 仅在保存时提交，不会在页面再次显示。</template>
       </el-alert>
 
       <div class="form-grid">
@@ -91,6 +91,23 @@
         </div>
         <el-button :icon="DocumentCopy" circle title="复制回调地址" @click="copyCallback" />
       </section>
+
+      <!-- 推送密钥由本系统生成，和微信那边的配置无关，所以不跟着「保存配置」走，点按钮就立即生效 -->
+      <el-form-item v-if="editing" label="推送密钥" class="notify-secret">
+        <div class="secret-row">
+          <el-input :model-value="notifySecret" readonly type="password" show-password
+                    placeholder="尚未生成" class="mono" />
+          <el-button :icon="DocumentCopy" :disabled="!notifySecret" title="复制推送密钥" @click="copySecret" />
+          <el-button :icon="Refresh" :loading="regenerating" @click="regenerateSecret">
+            {{ notifySecret ? '刷新' : '生成' }}
+          </el-button>
+        </div>
+        <div class="hint">
+          外部系统调用消息推送网关时放在请求头 <code>X-Notify-Secret</code> 里，系统据此确定是哪个公众号。
+          这个公众号下允许接口调用的通道都能用它触发。
+        </div>
+      </el-form-item>
+      <div v-else class="hint">保存后可在编辑配置里生成推送密钥</div>
     </el-form>
 
     <template #footer>
@@ -104,8 +121,8 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { CircleCheckFilled, DocumentCopy, EditPen, Plus } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { CircleCheckFilled, DocumentCopy, EditPen, Plus, Refresh } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api/console'
 import { session } from '@/lib/session'
 import router from '@/router'
@@ -118,6 +135,8 @@ const editing = ref(false)
 const saving = ref(false)
 const encryptionMode = ref('aes')
 const form = reactive(emptyForm())
+const notifySecret = ref('')
+const regenerating = ref(false)
 
 const callbackUrl = computed(() => {
   const appid = form.appid || '你的AppID'
@@ -150,11 +169,16 @@ function openCreate() {
   editing.value = false
   encryptionMode.value = 'aes'
   Object.assign(form, emptyForm())
+  notifySecret.value = ''
   drawerOpen.value = true
 }
 
 async function openEdit(item) {
-  const { account } = await api.accountConfig(item.appid)
+  const [{ account }, secret] = await Promise.all([
+    api.accountConfig(item.appid),
+    api.notifySecret(item.appid),
+  ])
+  notifySecret.value = secret.notifySecret || ''
   editing.value = true
   encryptionMode.value = account.aesKeyConfigured ? 'aes' : 'plain'
   Object.assign(form, {
@@ -175,6 +199,36 @@ async function copyCallback() {
     ElMessage.success('回调地址已复制')
   } catch {
     ElMessage.warning('复制失败，请手动复制回调地址')
+  }
+}
+
+async function copySecret() {
+  try {
+    await navigator.clipboard.writeText(notifySecret.value)
+    ElMessage.success('推送密钥已复制')
+  } catch {
+    ElMessage.warning('复制失败，请点眼睛图标显示后手动复制')
+  }
+}
+
+async function regenerateSecret() {
+  if (notifySecret.value) {
+    try {
+      await ElMessageBox.confirm(
+        '刷新后旧密钥立即失效，正在用它调用网关的外部系统（例如 GitHub 部署通知）会推送失败，直到换上新密钥。',
+        '刷新推送密钥',
+        { type: 'warning', confirmButtonText: '刷新', cancelButtonText: '取消' },
+      )
+    } catch {
+      return
+    }
+  }
+  regenerating.value = true
+  try {
+    notifySecret.value = (await api.regenerateNotifySecret(form.appid)).notifySecret
+    ElMessage.success('推送密钥已生成，记得同步到调用方')
+  } finally {
+    regenerating.value = false
   }
 }
 
@@ -242,4 +296,10 @@ footer { justify-content: flex-end; margin-top: 24px; }
 .callback span { margin-bottom: 6px; color: #66748d; font-size: 12px; }
 .callback code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #195e40; font-size: 12px; }
 .drawer-actions { justify-content: flex-end; gap: 10px; }
+.notify-secret { margin-top: 18px; }
+.secret-row { display: flex; gap: 8px; width: 100%; }
+.secret-row .el-input { flex: 1; }
+.mono :deep(input) { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.hint { margin-top: 6px; color: #8793a9; font-size: 12px; line-height: 1.6; }
+.hint code { color: #195e40; }
 </style>

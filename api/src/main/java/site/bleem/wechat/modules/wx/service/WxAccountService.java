@@ -25,6 +25,17 @@ public interface WxAccountService extends IService<WxAccount> {
 
     boolean saveOrUpdateWxAccount(WxAccount entity);
 
+    /**
+     * 按推送密钥找公众号，找不到返回 null
+     */
+    WxAccount getByNotifySecret(String notifySecret);
+
+    /**
+     * 生成新的推送密钥并写库，旧密钥立即失效
+     * @return 新密钥明文
+     */
+    String regenerateNotifySecret(String appid);
+
     @Override
     boolean removeByIds(Collection<?> idList);
 }

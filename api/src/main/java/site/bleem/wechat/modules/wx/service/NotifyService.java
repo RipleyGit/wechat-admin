@@ -15,7 +15,10 @@ public interface NotifyService extends IService<NotifyChannel> {
 
     PageUtils queryPage(Map<String, Object> params);
 
-    NotifyChannel getByCode(String code);
+    /**
+     * code 只在公众号内唯一，所以必须带上 appid
+     */
+    NotifyChannel getByCode(String appid, String code);
 
     /**
      * 按通道推送

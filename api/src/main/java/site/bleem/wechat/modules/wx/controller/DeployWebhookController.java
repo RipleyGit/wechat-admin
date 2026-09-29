@@ -19,12 +19,10 @@ import site.bleem.wechat.modules.wx.form.DeployWebhookForm;
 import site.bleem.wechat.modules.wx.service.NotifyService;
 
 /**
- * 接收 GitHub Actions 部署结果回调
+ * 接收 GitHub Actions 部署结果回调（过渡期保留，准备下线）
  *
- * 文案和收件人已经搬到 wx_notify_channel（deploy-success / deploy-failure），
- * 这里只剩鉴权和字段转换。路径和鉴权方式都不能动：
- * deploy.yml 拿这个地址当服务启动探针，用一个故意写错的 secret 打过来，
- * 只要能拿到 HTTP 状态码就算服务起来了。
+ * deploy.yml 已经改为直接调通用网关 /notify/{code}，这个入口只在需要回滚到旧 workflow 时用。
+ * 新方式跑稳后连同 deploy.webhook 配置一起删掉。
  */
 @RestController
 @RequestMapping("/deploy")
@@ -49,7 +47,7 @@ public class DeployWebhookController {
 
         // 成功和失败是两个通道，文案各自独立，不在这里做值映射
         String code = "success".equals(form.getStatus()) ? "deploy-success" : "deploy-failure";
-        NotifyChannel channel = notifyService.getByCode(code);
+        NotifyChannel channel = notifyService.getByCode(deployWebhookProperties.getAppid(), code);
         if (channel == null) {
             // 迁移脚本漏了 seed。返回 200 是因为 deploy.yml 的通知步骤是 continue-on-error，
             // 报错也不会让部署失败，只会把真正的原因埋在 Actions 日志里

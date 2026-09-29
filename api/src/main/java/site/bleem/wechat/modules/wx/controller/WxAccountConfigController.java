@@ -110,6 +110,36 @@ public class WxAccountConfigController extends AbstractController {
         return R.ok().put("account", WxAccountConfigView.from(account));
     }
 
+    /**
+     * 查看推送密钥
+     *
+     * 单独一个接口，不放进 WxAccountConfigView：那个视图也给公众号列表用，
+     * 放进去等于所有能看列表的人都能拿到密钥。这里要求和编辑公众号一样的权限。
+     */
+    @GetMapping("/{appid}/notify-secret")
+    @RequiresPermissions("wx:wxaccount:save")
+    public R notifySecret(@PathVariable String appid) {
+        wxAccountAccessService.assertAccessible(getUserId(), appid);
+        WxAccount account = wxAccountService.getById(appid);
+        if (account == null) {
+            throw new RRException("公众号不存在", 404);
+        }
+        return R.ok().put("notifySecret", account.getNotifySecret());
+    }
+
+    /**
+     * 生成或刷新推送密钥，旧密钥立即失效
+     */
+    @PostMapping("/{appid}/notify-secret")
+    @RequiresPermissions("wx:wxaccount:save")
+    public R regenerateNotifySecret(@PathVariable String appid) {
+        wxAccountAccessService.assertAccessible(getUserId(), appid);
+        if (wxAccountService.getById(appid) == null) {
+            throw new RRException("公众号不存在", 404);
+        }
+        return R.ok().put("notifySecret", wxAccountService.regenerateNotifySecret(appid));
+    }
+
     private void validateForm(WxAccountConfigForm form) {
         if (form == null || !StringUtils.hasText(form.getAppid())) {
             throw new RRException("请填写 AppID");
