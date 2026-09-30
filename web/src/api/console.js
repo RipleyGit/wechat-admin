@@ -44,4 +44,6 @@ export const api = {
   previewNotify: (data) => http.post('/manage/notifyChannel/preview', data),
   sendNotify: (data) => http.post('/manage/notifyChannel/send', data),
   notifyLogs: (params) => http.get('/manage/notifyChannel/logs', { params }),
+  msgTemplates: (params) => http.get('/manage/msgTemplate/list', { params }),
+  syncMsgTemplates: () => http.post('/manage/msgTemplate/syncWxTemplate'),
 }

@@ -198,6 +198,12 @@ public class NotifyServiceImpl extends ServiceImpl<NotifyChannelMapper, NotifyCh
             throw new IllegalStateException("模板消息未配置 templateId");
         }
         List<WxMpTemplateData> data = buildTemplateData(channel, vars);
+        // dispatch 里渲染 contentTemplate 对模板消息是空串，这里把各字段值拼起来，
+        // 让推送记录能看出模板消息实际发了什么
+        notifyLog.setContent(data.stream()
+                .map(WxMpTemplateData::getValue)
+                .filter(StringUtils::hasText)
+                .collect(Collectors.joining("\n")));
         int success = 0;
         String firstError = null;
         for (String openid : openids) {

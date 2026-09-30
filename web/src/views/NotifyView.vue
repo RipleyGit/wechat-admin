@@ -79,15 +79,15 @@
           <div v-if="form.id" class="hint">标识是网关地址的一部分，建好之后不能改，否则调用方那边会静默失败</div>
         </el-form-item>
         <el-form-item label="发送方式">
-          <el-radio-group v-model="form.sendType">
+          <el-radio-group v-model="form.sendType" @change="onSendTypeChange">
             <el-radio label="kefu">客服消息</el-radio>
             <el-radio label="template">模板消息</el-radio>
           </el-radio-group>
           <div v-if="form.sendType === 'kefu'" class="hint">
             客服消息只能发给 48 小时内和公众号互动过的粉丝，超窗的会单独失败
           </div>
-          <div v-else class="hint warn">
-            模板消息需要先在微信后台申请模板，当前还没有可用模板，配好也发不出去
+          <div v-else class="hint">
+            模板消息不受 48 小时窗口限制，但需先在微信后台申请模板，再点同步拉到本地
           </div>
         </el-form-item>
         <el-form-item label="收件人">
@@ -125,16 +125,25 @@
           <pre v-if="previewText !== null" class="preview">{{ previewText || '(渲染结果为空)' }}</pre>
         </el-form-item>
         <template v-if="form.sendType === 'template'">
-          <el-form-item label="模板 ID">
-            <el-input v-model="form.templateId" placeholder="微信后台申请通过后的模板 ID" />
+          <el-form-item label="模板">
+            <el-select v-model="form.templateId" filterable placeholder="选择模板" class="grow"
+                       @change="onTemplateChange">
+              <el-option v-for="t in msgTemplateList" :key="t.templateId"
+                         :label="t.title || t.templateId" :value="t.templateId" />
+            </el-select>
+            <el-button link type="primary" :loading="syncingTemplates" @click="syncTemplates">同步</el-button>
           </el-form-item>
           <el-form-item label="跳转链接">
             <el-input v-model="form.templateUrl" placeholder="选填，点击模板消息后跳转的地址" />
           </el-form-item>
           <el-form-item label="字段映射">
-            <el-input v-model="templateDataText" type="textarea" :rows="5"
-                      placeholder='[{"name":"first","value":"{title}"},{"name":"keyword1","value":"{branch}"}]' />
-            <div class="hint">JSON 数组，value 里同样支持 <span class="mono">{变量}</span> 占位符</div>
+            <el-input v-model="templateDataText" type="textarea" :rows="6"
+                      placeholder='[{"name":"content","value":"{commit_short} 部署成功"}]' />
+            <div class="hint">
+              JSON 数组，每项 <span class="mono">name</span> 对应模板里的 <span class="mono">{{字段名.DATA}}</span>，
+              <span class="mono">value</span> 支持 <span class="mono">{变量}</span> 占位符。
+              选模板时自动生成骨架，只需填 value
+            </div>
           </el-form-item>
         </template>
         <el-form-item label="备注">
@@ -213,6 +222,8 @@ const total = ref(0)
 const loading = ref(false)
 const params = reactive({ page: 1, limit: 10 })
 const tags = ref([])
+const msgTemplateList = ref([])
+const syncingTemplates = ref(false)
 const origin = location.origin
 
 const dialog = ref(false)
@@ -275,6 +286,56 @@ function edit(row) {
   previewText.value = null
   previewVarsHint.value = ''
   dialog.value = true
+  if (form.sendType === 'template') {
+    loadMsgTemplates()
+  }
+}
+
+async function loadMsgTemplates() {
+  try {
+    const r = await api.msgTemplates({ page: 1, limit: 100 })
+    msgTemplateList.value = r.page.list || []
+  } catch {
+    msgTemplateList.value = []
+  }
+}
+
+/** 切到模板消息时懒加载模板列表，切回客服不用管 */
+function onSendTypeChange(val) {
+  if (val === 'template' && msgTemplateList.value.length === 0) {
+    loadMsgTemplates()
+  }
+}
+
+async function syncTemplates() {
+  syncingTemplates.value = true
+  try {
+    await api.syncMsgTemplates()
+    await loadMsgTemplates()
+    ElMessage.success('已同步')
+  } finally {
+    syncingTemplates.value = false
+  }
+}
+
+/**
+ * 选中模板后，解析模板 content（{{xxx.DATA}}）自动生成字段映射骨架，
+ * 用户只需填 value。已有值不覆盖，方便来回切模板不丢内容
+ */
+function onTemplateChange() {
+  const tpl = msgTemplateList.value.find(t => t.templateId === form.templateId)
+  if (!tpl || !tpl.content) return
+  const names = [...tpl.content.matchAll(/\{\{(\w+)\.DATA\}\}/g)].map(m => m[1])
+  if (!names.length) return
+  const existing = form.templateData && Array.isArray(form.templateData)
+    ? Object.fromEntries(form.templateData.map(d => [d.name, d.value || '']))
+    : {}
+  const skeleton = names.map(name => ({
+    name,
+    value: existing[name] || '',
+  }))
+  form.templateData = skeleton
+  templateDataText.value = JSON.stringify(skeleton, null, 2)
 }
 
 async function save() {
