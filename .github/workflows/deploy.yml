@@ -149,6 +149,7 @@ jobs:
           COMMIT_MSG: ${{ github.event.head_commit.message }}
           ACTOR: ${{ github.actor }}
           BRANCH: ${{ github.ref_name }}
+          PROJECT: ${{ github.event.repository.name }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python3 - <<'PYEOF'
@@ -156,6 +157,7 @@ jobs:
           deploy_time = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
           commit_msg = (os.environ.get('COMMIT_MSG') or '').split('\n', 1)[0].strip()
           payload = json.dumps({
+              "project": os.environ.get('PROJECT', ''),
               "branch": os.environ.get('BRANCH', ''),
               "commit_msg": commit_msg,
               "commit_short": commit_msg[:20] + '…' if len(commit_msg) > 20 else commit_msg,
@@ -200,6 +202,7 @@ jobs:
           COMMIT_MSG: ${{ github.event.head_commit.message }}
           ACTOR: ${{ github.actor }}
           BRANCH: ${{ github.ref_name }}
+          PROJECT: ${{ github.event.repository.name }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
           STEP_DOWNLOAD_WEB: ${{ steps.download_web.outcome }}
           STEP_DOWNLOAD_API: ${{ steps.download_api.outcome }}
@@ -226,6 +229,7 @@ jobs:
                       failed_step += f'\n错误：{err_detail[:200]}'
                   break
           payload = json.dumps({
+              "project": os.environ.get('PROJECT', ''),
               "branch": os.environ.get('BRANCH', ''),
               "commit_msg": commit_msg,
               "commit_short": commit_msg[:20] + '…' if len(commit_msg) > 20 else commit_msg,

@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS `wx_notify_log` (
 INSERT INTO `wx_notify_channel`
   (`appid`, `code`, `name`, `secret`, `enabled`, `send_type`, `recipient_type`, `recipient_value`, `content_mode`, `content_template`, `remark`)
 SELECT 'wxfd938c6a7ced4eab', 'deploy-success', '部署成功通知', '', 1, 'kefu', 'tag', 'develop', 'render',
-  '✅ {commit_short} 部署成功\n分支：{branch}\n提交：{commit_msg}\n作者：{actor}\n时间：{deploy_time}',
+  '✅ {commit_short} 部署成功\n项目：{project}\n分支：{branch}\n提交：{commit_msg}\n作者：{actor}\n时间：{deploy_time}',
   'GitHub Actions 部署成功后自动推送'
 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM `wx_notify_channel` WHERE `code` = 'deploy-success');
 
@@ -71,7 +71,7 @@ FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM `wx_notify_channel` WHERE `code` = 'de
 INSERT INTO `wx_notify_channel`
   (`appid`, `code`, `name`, `secret`, `enabled`, `send_type`, `recipient_type`, `recipient_value`, `content_mode`, `content_template`, `remark`)
 SELECT 'wxfd938c6a7ced4eab', 'deploy-failure', '部署失败通知', '', 1, 'kefu', 'tag', 'develop', 'render',
-  '❌ {commit_short} 部署失败\n分支：{branch}\n提交：{commit_msg}\n作者：{actor}\n时间：{deploy_time}\n失败步骤：{failed_step?}\n日志：{run_url?}',
+  '❌ {commit_short} 部署失败\n项目：{project}\n分支：{branch}\n提交：{commit_msg}\n作者：{actor}\n时间：{deploy_time}\n失败步骤：{failed_step?}\n日志：{run_url?}',
   'GitHub Actions 部署失败后自动推送'
 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM `wx_notify_channel` WHERE `code` = 'deploy-failure');
 

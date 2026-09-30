@@ -88,9 +88,10 @@ curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18088/wx/notify/deploy-s
 `if: success()`，POST 到 `https://wechat.bleem.site/wx/notify/deploy-success`，body：
 
 ```json
-{"branch":"...","commit_msg":"...","commit_short":"...","actor":"...","run_url":"...","deploy_time":"UTC+8 时间"}
+{"project":"...","branch":"...","commit_msg":"...","commit_short":"...","actor":"...","run_url":"...","deploy_time":"UTC+8 时间"}
 ```
 
+- `project` 是 `${{ github.event.repository.name }}`，即 GitHub 仓库名。
 - `commit_msg` 只取提交信息第一行。
 - `commit_short` 是 `commit_msg` 超过 20 个字符时截断加 `…`。模板只做占位替换，做不了截断，所以在 workflow 里算好传进去。
 
