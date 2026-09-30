@@ -160,7 +160,8 @@ jobs:
               "project": os.environ.get('PROJECT', ''),
               "branch": os.environ.get('BRANCH', ''),
               "commit_msg": commit_msg,
-              "commit_short": commit_msg[:20] + '…' if len(commit_msg) > 20 else commit_msg,
+              # 模板消息的 thing 字段上限 20 字符，截断后含省略号也要在这个数内
+              "commit_short": commit_msg[:19] + '…' if len(commit_msg) > 20 else commit_msg,
               "actor": os.environ.get('ACTOR', ''),
               "run_url": os.environ.get('RUN_URL', ''),
               "deploy_time": deploy_time,
@@ -232,7 +233,8 @@ jobs:
               "project": os.environ.get('PROJECT', ''),
               "branch": os.environ.get('BRANCH', ''),
               "commit_msg": commit_msg,
-              "commit_short": commit_msg[:20] + '…' if len(commit_msg) > 20 else commit_msg,
+              # 模板消息的 thing 字段上限 20 字符，截断后含省略号也要在这个数内
+              "commit_short": commit_msg[:19] + '…' if len(commit_msg) > 20 else commit_msg,
               "actor": os.environ.get('ACTOR', ''),
               "run_url": os.environ.get('RUN_URL', ''),
               "deploy_time": deploy_time,
