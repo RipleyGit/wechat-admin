@@ -166,7 +166,7 @@ jobs:
               "deploy_time": deploy_time,
           }, ensure_ascii=False).encode('utf-8')
           req = urllib.request.Request(
-              'https://wechat.bleem.site/wx/notify/deploy-success',
+              'https://wechat.bleem.site/wx/notify/deploy-success-template',
               data=payload,
               headers={
                   'Content-Type': 'application/json; charset=utf-8',
@@ -239,7 +239,7 @@ jobs:
               "failed_step": failed_step,
           }, ensure_ascii=False).encode('utf-8')
           req = urllib.request.Request(
-              'https://wechat.bleem.site/wx/notify/deploy-failure',
+              'https://wechat.bleem.site/wx/notify/deploy-failure-template',
               data=payload,
               headers={
                   'Content-Type': 'application/json; charset=utf-8',
