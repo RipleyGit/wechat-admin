@@ -46,4 +46,11 @@ export const api = {
   notifyLogs: (params) => http.get('/manage/notifyChannel/logs', { params }),
   msgTemplates: (params) => http.get('/manage/msgTemplate/list', { params }),
   syncMsgTemplates: () => http.post('/manage/msgTemplate/syncWxTemplate'),
+  // 小程序用户。update 是 PUT、delete 是 DELETE，和本文件其他条目清一色 POST 不同，
+  // 这是后端 WxMiniUserManageController 的写法，别照着上面的改成 post
+  miniUsers: (params) => http.get('/manage/wxMiniUser/list', { params }),
+  saveMiniUser: (data) => http.post('/manage/wxMiniUser/save', data),
+  updateMiniUser: (data) => http.put('/manage/wxMiniUser/update', data),
+  deleteMiniUsers: (ids) => http.delete('/manage/wxMiniUser/delete', { data: ids }),
+  linkMiniUser: (id) => http.post(`/manage/wxMiniUser/link/${id}`),
 }

@@ -3,7 +3,6 @@ package site.bleem.wechat.modules.wx.service.impl;
 import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestTemplate;
 import site.bleem.wechat.common.exception.RRException;
+import site.bleem.wechat.common.utils.PageUtils;
 import site.bleem.wechat.common.utils.Query;
 import site.bleem.wechat.modules.wx.dao.WxMiniUserMapper;
 import site.bleem.wechat.modules.wx.entity.WxMiniUser;
@@ -59,7 +59,7 @@ public class WxMiniUserServiceImpl extends ServiceImpl<WxMiniUserMapper, WxMiniU
     }
 
     @Override
-    public IPage<WxMiniUser> queryPage(Map<String, Object> params) {
+    public PageUtils queryPage(Map<String, Object> params) {
         String miniAppid = (String) params.get("miniAppid");
         String miniOpenid = (String) params.get("miniOpenid");
         String serviceAppid = (String) params.get("serviceAppid");
@@ -75,7 +75,7 @@ public class WxMiniUserServiceImpl extends ServiceImpl<WxMiniUserMapper, WxMiniU
                 .like(StringUtils.hasText(nickname), "nickname", nickname)
                 .like(StringUtils.hasText(userPhone), "user_phone", userPhone);
 
-        return this.page(new Query<WxMiniUser>().getPage(params, "id", false), wrapper);
+        return new PageUtils(this.page(new Query<WxMiniUser>().getPage(params, "id", false), wrapper));
     }
 
     @Override

@@ -28,7 +28,7 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { ArrowDown, BellFilled, ChatDotRound, ChatLineRound, Grid, Picture, Promotion, PriceTag, Tickets, User, UserFilled } from '@element-plus/icons-vue'
+import { ArrowDown, BellFilled, Cellphone, ChatDotRound, ChatLineRound, Grid, Picture, Promotion, PriceTag, Tickets, User, UserFilled } from '@element-plus/icons-vue'
 import { api } from '@/api/console'
 import { session } from '@/lib/session'
 
@@ -49,6 +49,9 @@ const nav = [
   { label: '自动回复', to: '/replies', icon: ChatDotRound },
   { label: '渠道二维码', to: '/qrcodes', icon: Tickets },
   { label: '消息推送', to: '/notify', icon: BellFilled },
+  // 小程序用户的维度是 mini_appid，和上面这些跟着 appid cookie 走的页面不是一回事，
+  // 切换公众号不会改变这个页面的数据
+  { label: '小程序用户', to: '/miniusers', icon: Cellphone },
 ]
 
 /**

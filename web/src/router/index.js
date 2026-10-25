@@ -19,6 +19,7 @@ const router = createRouter({
         { path: 'replies', name: 'replies', component: () => import('@/views/RepliesView.vue') },
         { path: 'qrcodes', name: 'qrcodes', component: () => import('@/views/QrcodesView.vue') },
         { path: 'notify', name: 'notify', component: () => import('@/views/NotifyView.vue') },
+        { path: 'miniusers', name: 'miniusers', component: () => import('@/views/MiniUsersView.vue') },
       ],
     },
   ],

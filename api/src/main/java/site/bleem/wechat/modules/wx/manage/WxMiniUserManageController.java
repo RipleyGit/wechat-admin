@@ -1,6 +1,5 @@
 package site.bleem.wechat.modules.wx.manage;
 
-import com.baomidou.mybatisplus.core.metadata.IPage;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import org.apache.shiro.authz.annotation.RequiresPermissions;
@@ -31,8 +30,7 @@ public class WxMiniUserManageController {
     @RequiresPermissions("wx:wxminiuser:list")
     @ApiOperation(value = "列表")
     public R list(@RequestParam Map<String, Object> params) {
-        IPage<WxMiniUser> page = wxMiniUserService.queryPage(params);
-        return R.ok().put(page);
+        return R.ok().put("page", wxMiniUserService.queryPage(params));
     }
 
     @GetMapping("/info/{id}")
