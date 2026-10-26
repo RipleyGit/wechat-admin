@@ -87,6 +87,14 @@ public class WxAccountServiceImpl extends ServiceImpl<WxAccountMapper, WxAccount
     }
 
     @Override
+    public WxAccount getByMiniAppid(String miniAppid) {
+        if (!StringUtils.hasText(miniAppid)) {
+            return null;
+        }
+        return this.getOne(new QueryWrapper<WxAccount>().eq("mini_appid", miniAppid).last("LIMIT 1"));
+    }
+
+    @Override
     public String regenerateNotifySecret(String appid) {
         byte[] bytes = new byte[NOTIFY_SECRET_BYTES];
         SECURE_RANDOM.nextBytes(bytes);

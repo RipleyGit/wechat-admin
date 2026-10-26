@@ -31,6 +31,14 @@ public interface WxAccountService extends IService<WxAccount> {
     WxAccount getByNotifySecret(String notifySecret);
 
     /**
+     * 按关联的门户小程序 appid 找公众号，找不到返回 null。
+     *
+     * mini_appid 上有唯一索引，所以最多命中一行。门户小程序登录时用它定位
+     * AppSecret，并据此推出 service_appid。
+     */
+    WxAccount getByMiniAppid(String miniAppid);
+
+    /**
      * 生成新的推送密钥并写库，旧密钥立即失效
      * @return 新密钥明文
      */

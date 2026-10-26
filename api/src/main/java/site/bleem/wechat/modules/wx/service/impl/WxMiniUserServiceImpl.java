@@ -14,10 +14,12 @@ import site.bleem.wechat.common.exception.RRException;
 import site.bleem.wechat.common.utils.PageUtils;
 import site.bleem.wechat.common.utils.Query;
 import site.bleem.wechat.modules.wx.dao.WxMiniUserMapper;
+import site.bleem.wechat.modules.wx.entity.WxAccount;
 import site.bleem.wechat.modules.wx.entity.WxMiniUser;
 import site.bleem.wechat.modules.wx.entity.WxUser;
 import site.bleem.wechat.modules.wx.form.WxMiniUserLoginForm;
 import site.bleem.wechat.modules.wx.form.WxMiniUserProfileForm;
+import site.bleem.wechat.modules.wx.service.WxAccountService;
 import site.bleem.wechat.modules.wx.service.WxMiniUserService;
 import site.bleem.wechat.modules.wx.service.WxUserService;
 
@@ -35,27 +37,22 @@ public class WxMiniUserServiceImpl extends ServiceImpl<WxMiniUserMapper, WxMiniU
                     + "?appid={appid}&secret={secret}&js_code={code}&grant_type=authorization_code";
 
     private final WxUserService wxUserService;
-
-    /**
-     * 小程序的 AppSecret。只有配了才能用 code 换 openid。
-     * 没配时登录接口要求调用方直传 miniOpenid。
-     */
-    @Value("${wx.mini.secret:}")
-    private String miniSecret;
+    private final WxAccountService wxAccountService;
 
     /**
      * 是否允许调用方直传 miniOpenid 登录。
      *
      * 本接口无鉴权，直传 openid 等于任何人都能用别人的 openid 读写档案。
-     * 配好 wx.mini.secret 之后应把这个开关关掉，只留 code 登录。
+     * 在公众号配置页填好小程序 AppSecret 之后应把这个开关关掉，只留 code 登录。
      */
     @Value("${wx.mini.allow-openid-login:true}")
     private boolean allowOpenidLogin;
 
     private final RestTemplate restTemplate = new RestTemplate();
 
-    public WxMiniUserServiceImpl(WxUserService wxUserService) {
+    public WxMiniUserServiceImpl(WxUserService wxUserService, WxAccountService wxAccountService) {
         this.wxUserService = wxUserService;
+        this.wxAccountService = wxAccountService;
     }
 
     @Override
@@ -91,12 +88,25 @@ public class WxMiniUserServiceImpl extends ServiceImpl<WxMiniUserMapper, WxMiniU
             throw new RRException("miniAppid 不能为空");
         }
 
+        // 小程序的 AppSecret 和它所属的公众号都挂在 wx_account 上，按 mini_appid 反查。
+        // mini_appid 有唯一索引，最多命中一行
+        WxAccount account = wxAccountService.getByMiniAppid(form.getMiniAppid());
+
+        /*
+         * service_appid 优先用关联公众号的 appid。
+         *
+         * 它决定了这个小程序用户去哪个公众号下找对应的粉丝（linkServiceUser 的查询条件），
+         * 是服务端自己的配置，比调用方传上来的值可信 —— 本接口无鉴权，调用方传什么都不能当真。
+         * 只有还没在页面上配关联时，才退回用调用方传的值，保持改造前的行为。
+         */
+        String serviceAppid = account != null ? account.getAppid() : form.getServiceAppid();
+
         String miniOpenid = form.getMiniOpenid();
         String unionid = null;
 
         // code 优先：openid 由服务端换取，不可伪造，还能顺带拿到 unionid
         if (StringUtils.hasText(form.getCode())) {
-            JSONObject session = code2Session(form.getMiniAppid(), form.getCode());
+            JSONObject session = code2Session(account, form.getMiniAppid(), form.getCode());
             miniOpenid = session.getString("openid");
             unionid = session.getString("unionid");
         }
@@ -113,7 +123,7 @@ public class WxMiniUserServiceImpl extends ServiceImpl<WxMiniUserMapper, WxMiniU
 
         if (user == null) {
             // 数据不存在：默认建档，由小程序弹资料表单让用户完善
-            user = new WxMiniUser(form.getMiniAppid(), miniOpenid, form.getServiceAppid());
+            user = new WxMiniUser(form.getMiniAppid(), miniOpenid, serviceAppid);
             user.setUnionid(unionid);
             linkServiceUser(user);
             this.save(user);
@@ -128,9 +138,8 @@ public class WxMiniUserServiceImpl extends ServiceImpl<WxMiniUserMapper, WxMiniU
             user.setUnionid(unionid);
             dirty = true;
         }
-        if (StringUtils.hasText(form.getServiceAppid())
-                && !form.getServiceAppid().equals(user.getServiceAppid())) {
-            user.setServiceAppid(form.getServiceAppid());
+        if (StringUtils.hasText(serviceAppid) && !serviceAppid.equals(user.getServiceAppid())) {
+            user.setServiceAppid(serviceAppid);
             dirty = true;
         }
         if (!StringUtils.hasText(user.getServiceOpenid()) && linkServiceUser(user)) {
@@ -247,9 +256,13 @@ public class WxMiniUserServiceImpl extends ServiceImpl<WxMiniUserMapper, WxMiniU
      * 本项目只引了 weixin-java-mp（公众号），没有小程序 SDK，所以直接调官方
      * HTTP 接口，不额外加依赖。
      */
-    private JSONObject code2Session(String miniAppid, String code) {
+    private JSONObject code2Session(WxAccount account, String miniAppid, String code) {
+        String miniSecret = account == null ? null : account.getMiniSecret();
         if (!StringUtils.hasText(miniSecret)) {
-            throw new RRException("未配置 wx.mini.secret，无法用 code 换取 openid");
+            // account 为 null 说明没有公众号认领这个 miniAppid，两种情况给同一个提示：
+            // 运营要做的动作都是去配置页把小程序 appid 和 AppSecret 填上
+            throw new RRException("小程序 " + miniAppid
+                    + " 未配置 AppSecret，请在运营台「选择工作公众号 → 配置」里填写");
         }
         String body;
         try {

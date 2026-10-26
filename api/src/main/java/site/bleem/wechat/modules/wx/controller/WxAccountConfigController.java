@@ -88,6 +88,8 @@ public class WxAccountConfigController extends AbstractController {
             account.setAesKey(form.getAesKey().trim());
         }
 
+        applyMiniConfig(form, account, appid);
+
         if (creating && !StringUtils.hasText(account.getSecret())) {
             throw new RRException("首次接入必须填写 AppSecret");
         }
@@ -138,6 +140,43 @@ public class WxAccountConfigController extends AbstractController {
             throw new RRException("公众号不存在", 404);
         }
         return R.ok().put("notifySecret", wxAccountService.regenerateNotifySecret(appid));
+    }
+
+    /**
+     * 门户小程序的 appid 与 AppSecret
+     *
+     * 这两项原来是 WX_MINI_APPID / WX_MINI_SECRET 两个环境变量（全局单例），
+     * 现在挂在公众号上，每个公众号可以配自己的门户小程序。
+     *
+     * mini_appid 上有唯一索引，被别的公众号占用时数据库会抛约束冲突，
+     * 那个报错对运营没有任何意义，所以先查一次给出能看懂的提示。
+     */
+    private void applyMiniConfig(WxAccountConfigForm form, WxAccount account, String appid) {
+        if (Boolean.TRUE.equals(form.getClearMini())) {
+            account.setMiniAppid(null);
+            account.setMiniSecret(null);
+            return;
+        }
+
+        if (StringUtils.hasText(form.getMiniAppid())) {
+            String miniAppid = form.getMiniAppid().trim();
+            WxAccount owner = wxAccountService.getByMiniAppid(miniAppid);
+            if (owner != null && !appid.equals(owner.getAppid())) {
+                throw new RRException("小程序 " + miniAppid + " 已关联到公众号「" + owner.getName() + "」，"
+                    + "一个小程序只能挂在一个公众号下");
+            }
+            account.setMiniAppid(miniAppid);
+        }
+
+        // 留空表示不改，和 AppSecret / Token 一致。清空要走 clearMini
+        if (StringUtils.hasText(form.getMiniSecret())) {
+            account.setMiniSecret(form.getMiniSecret().trim());
+        }
+
+        // 只填了 AppSecret 却没有 appid，这个 secret 永远不会被用到（登录是按 mini_appid 反查的）
+        if (StringUtils.hasText(account.getMiniSecret()) && !StringUtils.hasText(account.getMiniAppid())) {
+            throw new RRException("填了小程序 AppSecret 就必须填小程序 AppID，否则登录接口找不到它");
+        }
     }
 
     private void validateForm(WxAccountConfigForm form) {

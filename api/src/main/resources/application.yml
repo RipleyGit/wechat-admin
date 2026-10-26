@@ -75,14 +75,12 @@ wx:
   mp:
     # 自动回复消息发送间隔（毫秒），适当增加间隔可提升用户体验
     autoReplyInterval: 1000
-  # 门户小程序。secret 故意不给默认值：没配就只能让小程序直传 openid，
-  # 配上之后应把 allow-openid-login 关掉，只留 code 登录（openid 不可伪造）。
-  # /wxMiniUser/** 是公开接口（ShiroConfig 里 /** 是 anon）。
+  # 门户小程序。
+  # appid 与 AppSecret 已搬到 wx_account 的 mini_appid / mini_secret 两列，
+  # 在运营台「选择工作公众号 → 配置」里维护，不再用环境变量
+  # （见 db/migrations/20261026_add_wx_account_mini.sql）。
+  # /wxMiniUser/** 是公开接口（ShiroConfig 里 /** 是 anon），所以留着下面这个开关。
   mini:
-    appid: ${WX_MINI_APPID:wx62c3973df7065a2b}
-    secret: ${WX_MINI_SECRET:}
-    # 关联的服务号 appid。小程序登录时会把它一起传上来，这里作为缺省值
-    service-appid: ${WX_MINI_SERVICE_APPID:wxfd938c6a7ced4eab}
     allow-openid-login: ${WX_MINI_ALLOW_OPENID_LOGIN:true}
 
 deploy:

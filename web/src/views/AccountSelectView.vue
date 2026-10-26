@@ -84,6 +84,38 @@
         <el-switch v-model="form.verified" active-text="已认证" inactive-text="未认证" />
       </el-form-item>
 
+      <!--
+        门户小程序：原先是 WX_MINI_APPID / WX_MINI_SECRET 两个环境变量，改成挂在公众号上。
+        不填就是这个公众号没有配套小程序，不影响公众号本身的任何功能
+      -->
+      <el-divider content-position="left">门户小程序（选填）</el-divider>
+
+      <el-form-item label="小程序 AppID">
+        <el-input v-model.trim="form.miniAppid" maxlength="64"
+                  :placeholder="editing ? '留空则保持现有关联不变，解除请点下方按钮' : 'wx 开头的小程序 AppID，不填表示本公众号无配套小程序'" />
+        <div class="hint">
+          小程序登录时按它反查本公众号，拿到下面的 AppSecret，并据此决定小程序用户关联到哪个公众号的粉丝。
+          一个小程序只能挂在一个公众号下。
+        </div>
+      </el-form-item>
+
+      <el-form-item label="小程序 AppSecret">
+        <el-input v-model="form.miniSecret" type="password" show-password
+                  :placeholder="miniSecretConfigured ? '留空则保持现有 AppSecret 不变' : '微信公众平台 → 开发管理 → 开发设置 → 开发者ID'" />
+        <div class="hint">
+          <template v-if="miniSecretConfigured">已配置。</template>
+          <template v-else>
+            <b>尚未配置</b>，<code>code</code> 登录会直接报错。
+          </template>
+          小程序后台只显示一次，重置会让旧值立即失效。
+        </div>
+      </el-form-item>
+
+      <el-form-item v-if="editing && (form.miniAppid || miniSecretConfigured)">
+        <el-button text type="danger" @click="clearMini">解除小程序关联</el-button>
+        <span class="hint" style="margin-left: 8px">清空 AppID 和 AppSecret，该小程序的登录接口将不可用</span>
+      </el-form-item>
+
       <section class="callback">
         <div>
           <span>消息推送 URL</span>
@@ -137,6 +169,10 @@ const encryptionMode = ref('aes')
 const form = reactive(emptyForm())
 const notifySecret = ref('')
 const regenerating = ref(false)
+/** 小程序 AppSecret 后端只回「配过没有」，不回明文，所以单独记一个状态给占位符和提示用 */
+const miniSecretConfigured = ref(false)
+/** 点过「解除小程序关联」。只是个意图标记，真正生效要点保存 */
+const miniCleared = ref(false)
 
 const callbackUrl = computed(() => {
   const appid = form.appid || '你的AppID'
@@ -152,6 +188,8 @@ function emptyForm() {
     secret: '',
     token: '',
     aesKey: '',
+    miniAppid: '',
+    miniSecret: '',
   }
 }
 
@@ -170,6 +208,8 @@ function openCreate() {
   encryptionMode.value = 'aes'
   Object.assign(form, emptyForm())
   notifySecret.value = ''
+  miniSecretConfigured.value = false
+  miniCleared.value = false
   drawerOpen.value = true
 }
 
@@ -181,6 +221,8 @@ async function openEdit(item) {
   notifySecret.value = secret.notifySecret || ''
   editing.value = true
   encryptionMode.value = account.aesKeyConfigured ? 'aes' : 'plain'
+  miniSecretConfigured.value = !!account.miniSecretConfigured
+  miniCleared.value = false
   Object.assign(form, {
     appid: account.appid,
     name: account.name,
@@ -189,8 +231,35 @@ async function openEdit(item) {
     secret: '',
     token: '',
     aesKey: '',
+    // appid 不是密钥，回显出来方便改；AppSecret 永远留空，留空即「保持不变」
+    miniAppid: account.miniAppid || '',
+    miniSecret: '',
   })
   drawerOpen.value = true
+}
+
+/**
+ * 解除小程序关联
+ *
+ * 只清输入框 + 记一个意图标记，真正生效要点「保存配置」。清空和「留空表示不改」
+ * 在同一个输入框里无法区分，所以后端靠 clearMini 这个显式开关识别，
+ * 和 EncodingAESKey 的 clearAesKey 是同一套路。
+ */
+async function clearMini() {
+  try {
+    await ElMessageBox.confirm(
+      '解除后这个小程序的登录接口会报「未配置 AppSecret」，门户登录不可用，直到重新填回来。',
+      '解除小程序关联',
+      { type: 'warning', confirmButtonText: '解除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  form.miniAppid = ''
+  form.miniSecret = ''
+  miniSecretConfigured.value = false
+  miniCleared.value = true
+  ElMessage.info('点「保存配置」后生效')
 }
 
 async function copyCallback() {
@@ -241,12 +310,19 @@ async function save() {
     ElMessage.warning('安全模式需要填写 43 位 EncodingAESKey')
     return
   }
+  // 登录接口是按 mini_appid 反查 AppSecret 的，只填 secret 不填 appid 永远用不上
+  if (form.miniSecret && !form.miniAppid) {
+    ElMessage.warning('填了小程序 AppSecret 就必须填小程序 AppID')
+    return
+  }
 
   saving.value = true
   try {
     const { account } = await api.saveAccountConfig({
       ...form,
       clearAesKey: encryptionMode.value === 'plain',
+      // 点过解除、并且之后没再填回内容，才真的让后端清空
+      clearMini: miniCleared.value && !form.miniAppid && !form.miniSecret,
     })
     await load()
     selected.value = list.value.find((item) => item.appid === account.appid) || selected.value
