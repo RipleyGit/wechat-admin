@@ -45,9 +45,10 @@ FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM `sys_menu` WHERE `url` = 'wx/miniuser'
 INSERT INTO `sys_menu` (`parent_id`, `name`, `url`, `perms`, `type`, `icon`, `order_num`)
 SELECT p.`menu_id`, b.`name`, NULL, b.`perms`, 2, NULL, 7
 FROM (SELECT `menu_id` FROM `sys_menu` WHERE `url` = 'wx/miniuser' LIMIT 1) p
+-- 没有「新增」：档案只由小程序登录接口自动建档，后台不手动造。
+-- 「修改」同时是应用可见范围（app_codes / default_code）的唯一授权入口。
 JOIN (
   SELECT '查看' AS `name`, 'wx:wxminiuser:list,wx:wxminiuser:info' AS `perms`
-  UNION ALL SELECT '新增', 'wx:wxminiuser:save'
   UNION ALL SELECT '修改', 'wx:wxminiuser:update'
   UNION ALL SELECT '删除', 'wx:wxminiuser:delete'
 ) b

@@ -40,31 +40,18 @@ public class WxMiniUserManageController {
         return R.ok().put(wxMiniUserService.getById(id));
     }
 
-    @PostMapping("/save")
-    @RequiresPermissions("wx:wxminiuser:save")
-    @ApiOperation(value = "新增")
-    public R save(@RequestBody WxMiniUser user) {
-        if (!StringUtils.hasText(user.getMiniAppid()) || !StringUtils.hasText(user.getMiniOpenid())) {
-            return R.error("小程序 appid 与 openid 不能为空");
-        }
-        if (wxMiniUserService.getByMiniOpenid(user.getMiniAppid(), user.getMiniOpenid()) != null) {
-            return R.error("该小程序用户已存在");
-        }
-        wxMiniUserService.save(user);
-        return R.ok();
-    }
-
+    /**
+     * 修改用户。**这里是应用可见范围（appCodes）与默认应用（defaultCode）的
+     * 唯一入口** —— 小程序端的资料表单只能改昵称/手机号/备注。
+     *
+     * 没有「新增」接口：档案只由小程序登录接口自动建档，后台手动造一条既没有
+     * 真实 openid 可填，也会和后续自动建档撞唯一键。
+     */
     @PutMapping("/update")
     @RequiresPermissions("wx:wxminiuser:update")
     @ApiOperation(value = "修改")
     public R update(@RequestBody WxMiniUser user) {
-        if (user.getId() == null) {
-            return R.error("id 不能为空");
-        }
-        // 唯一键不允许从后台改，避免把两条档案改成同一个人
-        user.setMiniAppid(null);
-        user.setMiniOpenid(null);
-        wxMiniUserService.updateById(user);
+        wxMiniUserService.updateByAdmin(user);
         return R.ok();
     }
 

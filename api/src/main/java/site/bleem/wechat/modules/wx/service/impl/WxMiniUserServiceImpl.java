@@ -160,25 +160,10 @@ public class WxMiniUserServiceImpl extends ServiceImpl<WxMiniUserMapper, WxMiniU
             return user;
         }
 
+        // 只允许改这三项。appCodes / defaultCode 是后台授权，走 updateByAdmin
         if (form.getNickname() != null) user.setNickname(form.getNickname());
         if (form.getUserPhone() != null) user.setUserPhone(form.getUserPhone());
         if (form.getRemark() != null) user.setRemark(form.getRemark());
-
-        if (form.getAppCodes() != null) {
-            user.setAppCodes(new JSONArray(new java.util.ArrayList<Object>(form.getAppCodes())));
-        }
-
-        // default_code 必须在 app_codes 内，否则直达会落到一个用户无权看的应用
-        if (form.getDefaultCode() != null) {
-            String code = form.getDefaultCode();
-            if (!StringUtils.hasText(code)) {
-                user.setDefaultCode(null);
-            } else if (user.getAppCodes() != null && user.getAppCodes().contains(code)) {
-                user.setDefaultCode(code);
-            } else {
-                throw new RRException("默认应用 " + code + " 不在该用户的应用范围内");
-            }
-        }
 
         user.setProfileFilled(true);
         this.updateById(user);
@@ -188,6 +173,32 @@ public class WxMiniUserServiceImpl extends ServiceImpl<WxMiniUserMapper, WxMiniU
             this.updateById(user);
         }
         return user;
+    }
+
+    @Override
+    public void updateByAdmin(WxMiniUser user) {
+        if (user.getId() == null) {
+            throw new RRException("id 不能为空");
+        }
+
+        WxMiniUser existing = this.getById(user.getId());
+        if (existing == null) {
+            throw new RRException("用户档案不存在");
+        }
+
+        // 唯一键不允许改，否则会把两条档案改成同一个人
+        user.setMiniAppid(null);
+        user.setMiniOpenid(null);
+
+        // default_code 必须在 app_codes 内，否则用户启动会直达一个他无权看的应用。
+        // appCodes 没传时沿用库里的值来校验。
+        JSONArray scope = user.getAppCodes() != null ? user.getAppCodes() : existing.getAppCodes();
+        String code = user.getDefaultCode();
+        if (StringUtils.hasText(code) && (scope == null || !scope.contains(code))) {
+            throw new RRException("默认应用 " + code + " 不在该用户的应用范围内");
+        }
+
+        this.updateById(user);
     }
 
     @Override

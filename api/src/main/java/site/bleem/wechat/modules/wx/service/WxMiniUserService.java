@@ -31,8 +31,19 @@ public interface WxMiniUserService extends IService<WxMiniUser> {
      */
     WxMiniUser login(WxMiniUserLoginForm form);
 
-    /** 用户自己完善资料。只允许改表单里那几个字段，按唯一键定位 */
+    /**
+     * 用户自己完善资料。只允许改 nickname / userPhone / remark，
+     * 应用可见范围属于后台授权，不走这里。
+     */
     WxMiniUser updateProfile(WxMiniUserProfileForm form);
+
+    /**
+     * 后台修改用户，是**应用可见范围与默认应用的唯一入口**。
+     *
+     * 业务唯一键（miniAppid / miniOpenid）不可改，档案也只由登录接口自动建，
+     * 后台不负责新增。
+     */
+    void updateByAdmin(WxMiniUser user);
 
     /**
      * 按 unionid 或手机号找同一个人的服务号 openid 并回填。
