@@ -109,7 +109,8 @@ public class WxMpPortalController {
 
     private String decryptRaw(String requestBody, String msgSignature, String timestamp, String nonce) {
         try {
-            return new WxMpCryptUtil(wxService.getWxMpConfigStorage()).decrypt(requestBody, msgSignature, timestamp, nonce);
+            String encrypt = WxMpXmlMessage.fromXml(requestBody).getEncrypt();
+            return new WxMpCryptUtil(wxService.getWxMpConfigStorage()).decrypt(encrypt, msgSignature, timestamp, nonce);
         } catch (Exception e) {
             logger.warn("解密原始消息失败，转发规则本次不生效：{}", e.getMessage());
             return null;
