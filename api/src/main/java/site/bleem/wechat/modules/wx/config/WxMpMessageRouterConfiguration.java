@@ -3,6 +3,8 @@ package site.bleem.wechat.modules.wx.config;
 import site.bleem.wechat.modules.wx.handler.*;
 import lombok.RequiredArgsConstructor;
 import me.chanjar.weixin.mp.api.WxMpMessageRouter;
+import me.chanjar.weixin.mp.util.WxMpConfigStorageHolder;
+import site.bleem.wechat.modules.wx.service.MsgForwardService;
 import me.chanjar.weixin.mp.api.WxMpService;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -23,6 +25,8 @@ public class WxMpMessageRouterConfiguration {
     private final ScanHandler scanHandler;
     private final UnsubscribeHandler unsubscribeHandler;
     private final SubscribeHandler subscribeHandler;
+    private final ForwardHandler forwardHandler;
+    private final MsgForwardService msgForwardService;
 
     @Bean
     public WxMpMessageRouter messageRouter(WxMpService wxMpService) {
@@ -35,6 +39,10 @@ public class WxMpMessageRouterConfiguration {
         newRouter.rule().async(false).msgType(EVENT).event(KF_CREATE_SESSION).handler(this.kfSessionHandler).end();
         // 自定义菜单事件
         newRouter.rule().async(false).msgType(EVENT).event(EventType.CLICK).handler(this.menuHandler).end();
+        // 命中转发规则的扫码 / 关注事件：转发后结束路由，跳过本地的关注和扫码处理
+        newRouter.rule().async(false).msgType(EVENT)
+            .matcher(message -> !msgForwardService.matchRules(WxMpConfigStorageHolder.get(), message).isEmpty())
+            .handler(this.forwardHandler).end();
         // 关注事件
         newRouter.rule().async(false).msgType(EVENT).event(SUBSCRIBE).handler(this.subscribeHandler).end();
         // 取消关注事件

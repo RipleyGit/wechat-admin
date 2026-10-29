@@ -8,6 +8,7 @@ import me.chanjar.weixin.mp.api.WxMpService;
 import me.chanjar.weixin.mp.bean.message.WxMpXmlMessage;
 import me.chanjar.weixin.mp.bean.message.WxMpXmlOutMessage;
 import org.apache.commons.lang3.StringUtils;
+import site.bleem.wechat.modules.wx.handler.WxRawMessageHolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.*;
@@ -70,7 +71,13 @@ public class WxMpPortalController {
         if (encType == null) {
             // 明文传输的消息
             WxMpXmlMessage inMessage = WxMpXmlMessage.fromXml(requestBody);
-            WxMpXmlOutMessage outMessage = this.route(appid,inMessage);
+            WxRawMessageHolder.set(requestBody);
+            WxMpXmlOutMessage outMessage;
+            try {
+                outMessage = this.route(appid,inMessage);
+            } finally {
+                WxRawMessageHolder.clear();
+            }
             if (outMessage == null) {
                 return "";
             }

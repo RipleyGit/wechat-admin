@@ -4,6 +4,7 @@ import java.util.Arrays;
 import java.util.Map;
 
 import site.bleem.wechat.modules.wx.service.MsgReplyRuleService;
+import site.bleem.wechat.modules.wx.service.impl.MsgForwardServiceImpl;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import me.chanjar.weixin.mp.api.WxMpService;
@@ -65,6 +66,7 @@ public class MsgReplyRuleManageController {
     @RequiresPermissions("wx:msgreplyrule:save")
     @ApiOperation(value = "保存")
     public R save(@RequestBody MsgReplyRule msgReplyRule) {
+        checkForwardTarget(msgReplyRule);
         msgReplyRuleService.save(msgReplyRule);
 
         return R.ok();
@@ -77,9 +79,17 @@ public class MsgReplyRuleManageController {
     @RequiresPermissions("wx:msgreplyrule:update")
     @ApiOperation(value = "修改")
     public R update(@RequestBody MsgReplyRule msgReplyRule) {
+        checkForwardTarget(msgReplyRule);
         msgReplyRuleService.updateById(msgReplyRule);
 
         return R.ok();
+    }
+
+    private void checkForwardTarget(MsgReplyRule msgReplyRule) {
+        if (MsgReplyRule.REPLY_TYPE_FORWARD.equals(msgReplyRule.getReplyType())) {
+            msgReplyRule.setReplyContent(msgReplyRule.getReplyContent().trim());
+            MsgForwardServiceImpl.validateTargetUrl(msgReplyRule.getReplyContent());
+        }
     }
 
     /**

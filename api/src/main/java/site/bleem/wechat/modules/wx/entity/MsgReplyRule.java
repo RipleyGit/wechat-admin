@@ -21,6 +21,7 @@ import java.util.Date;
 @TableName("wx_msg_reply_rule")
 public class MsgReplyRule implements Serializable {
     private static final long serialVersionUID = 1L;
+    public static final String REPLY_TYPE_FORWARD = "forward";
     @TableId(type = IdType.AUTO)
     private Long ruleId;
     private String appid;
@@ -29,6 +30,8 @@ public class MsgReplyRule implements Serializable {
     @NotEmpty(message = "匹配关键词不得为空")
     private String matchValue;
     private boolean exactMatch;
+    private String matchMode;
+    private String eventType;
     private String replyType;
     @NotEmpty(message = "回复内容不得为空")
     private String replyContent;

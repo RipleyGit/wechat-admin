@@ -48,4 +48,14 @@ public interface MsgReplyRuleService extends IService<MsgReplyRule> {
      * @return 规则列表
      */
     List<MsgReplyRule> getMatchedRules(String appid, boolean exactMatch, String keywords);
+
+    /**
+     * 筛选命中场景值的转发规则
+     *
+     * @param appid     公众号appid
+     * @param eventType SCAN 或 subscribe
+     * @param scene     场景值（已去掉 qrscene_ 前缀）
+     * @return 规则列表
+     */
+    List<MsgReplyRule> getMatchedForwardRules(String appid, String eventType, String scene);
 }

@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -93,11 +94,58 @@ public class MsgReplyRuleServiceImpl extends ServiceImpl<MsgReplyRuleMapper, Msg
     public List<MsgReplyRule> getMatchedRules(String appid, boolean exactMatch, String keywords) {
         LocalTime now = LocalTime.now();
         return this.getValidRules().stream()
+                .filter(rule->!MsgReplyRule.REPLY_TYPE_FORWARD.equals(rule.getReplyType())) // 转发规则由 MsgForwardService 处理
                 .filter(rule->!StringUtils.hasText(rule.getAppid()) || appid.equals(rule.getAppid())) // 检测是否是对应公众号的规则，如果appid为空则为通用规则
-                .filter(rule->null == rule.getEffectTimeStart() || rule.getEffectTimeStart().toLocalTime().isBefore(now))// 检测是否在有效时段，effectTimeStart为null则一直有效
-                .filter(rule->null == rule.getEffectTimeEnd() || rule.getEffectTimeEnd().toLocalTime().isAfter(now)) // 检测是否在有效时段，effectTimeEnd为null则一直有效
+                .filter(rule->isEffectiveAt(rule, now))
                 .filter(rule->isMatch(exactMatch || rule.isExactMatch(),rule.getMatchValue().split(","),keywords)) //检测是否符合匹配规则
                 .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<MsgReplyRule> getMatchedForwardRules(String appid, String eventType, String scene) {
+        if (!StringUtils.hasText(scene)) {
+            return new ArrayList<>();
+        }
+        LocalTime now = LocalTime.now();
+        return this.getValidRules().stream()
+                .filter(rule->MsgReplyRule.REPLY_TYPE_FORWARD.equals(rule.getReplyType()))
+                .filter(rule->!StringUtils.hasText(rule.getAppid()) || appid.equals(rule.getAppid()))
+                .filter(rule->!StringUtils.hasText(rule.getEventType()) || rule.getEventType().equals(eventType))
+                .filter(rule->isEffectiveAt(rule, now))
+                .filter(rule->isMatchByMode(rule, scene))
+                .collect(Collectors.toList());
+    }
+
+    private static boolean isEffectiveAt(MsgReplyRule rule, LocalTime now) {
+        return (null == rule.getEffectTimeStart() || rule.getEffectTimeStart().toLocalTime().isBefore(now))
+                && (null == rule.getEffectTimeEnd() || rule.getEffectTimeEnd().toLocalTime().isAfter(now));
+    }
+
+    /**
+     * 转发规则的匹配。matchMode 为空时沿用 exactMatch：精确或包含。
+     */
+    private static boolean isMatchByMode(MsgReplyRule rule, String scene) {
+        String mode = rule.getMatchMode() != null ? rule.getMatchMode()
+                : (rule.isExactMatch() ? "exact" : "contains");
+        for (String words : rule.getMatchValue().split(",")) {
+            if (words.isEmpty()) {
+                continue;
+            }
+            switch (mode) {
+                case "exact":
+                    if (words.equals(scene)) return true;
+                    break;
+                case "prefix":
+                    if (scene.startsWith(words)) return true;
+                    break;
+                case "contains":
+                    if (scene.contains(words)) return true;
+                    break;
+                default:
+                    break;
+            }
+        }
+        return false;
     }
 
     /**
