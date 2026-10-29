@@ -107,10 +107,16 @@ public class WxMpPortalController {
         return out;
     }
 
+    /**
+     * 还原微信原始明文 XML，供转发规则原样转发。
+     *
+     * WxCryptUtil.decryptXml 的参数顺序是 (msgSignature, timestamp, nonce, 整段加密XML)，
+     * 最后一个参数才是 XML：内部用 extractEncryptPart 解析它取出 &lt;Encrypt&gt;。
+     * 顺序放错时，XML 解析会拿到 nonce 之类的纯数字，报 "前言中不允许有内容"。
+     */
     private String decryptRaw(String requestBody, String msgSignature, String timestamp, String nonce) {
         try {
-            String encrypt = WxMpXmlMessage.fromXml(requestBody).getEncrypt();
-            return new WxMpCryptUtil(wxService.getWxMpConfigStorage()).decrypt(encrypt, msgSignature, timestamp, nonce);
+            return new WxMpCryptUtil(wxService.getWxMpConfigStorage()).decryptXml(msgSignature, timestamp, nonce, requestBody);
         } catch (Exception e) {
             logger.warn("解密原始消息失败，转发规则本次不生效：{}", e.getMessage());
             return null;
