@@ -8,6 +8,7 @@ import me.chanjar.weixin.mp.api.WxMpService;
 import me.chanjar.weixin.mp.bean.message.WxMpXmlMessage;
 import me.chanjar.weixin.mp.bean.message.WxMpXmlOutMessage;
 import org.apache.commons.lang3.StringUtils;
+import me.chanjar.weixin.mp.util.crypto.WxMpCryptUtil;
 import site.bleem.wechat.modules.wx.handler.WxRawMessageHolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -88,7 +89,13 @@ public class WxMpPortalController {
             WxMpXmlMessage inMessage = WxMpXmlMessage.fromEncryptedXml(requestBody, wxService.getWxMpConfigStorage(),
                 timestamp, nonce, msgSignature);
             logger.debug("\n消息解密后内容为：\n{} ", inMessage.toString());
-            WxMpXmlOutMessage outMessage = this.route(appid,inMessage);
+            WxRawMessageHolder.set(decryptRaw(requestBody, msgSignature, timestamp, nonce));
+            WxMpXmlOutMessage outMessage;
+            try {
+                outMessage = this.route(appid,inMessage);
+            } finally {
+                WxRawMessageHolder.clear();
+            }
             if (outMessage == null) {
                 return "";
             }
@@ -98,6 +105,15 @@ public class WxMpPortalController {
 
         logger.debug("\n组装回复信息：{}", out);
         return out;
+    }
+
+    private String decryptRaw(String requestBody, String msgSignature, String timestamp, String nonce) {
+        try {
+            return new WxMpCryptUtil(wxService.getWxMpConfigStorage()).decrypt(requestBody, msgSignature, timestamp, nonce);
+        } catch (Exception e) {
+            logger.warn("解密原始消息失败，转发规则本次不生效：{}", e.getMessage());
+            return null;
+        }
     }
 
     private WxMpXmlOutMessage route(String appid,WxMpXmlMessage message) {
