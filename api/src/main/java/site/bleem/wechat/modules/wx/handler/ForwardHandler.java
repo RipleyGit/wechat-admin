@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 命中转发规则的事件在此转发，不再执行本地的关注 / 扫码处理
+ * 命中转发规则的事件在此转发。返回 null 且路由以 next() 注册，所以本地的关注、扫码、取消关注处理照常执行。
  */
 @Component
 public class ForwardHandler extends AbstractHandler {

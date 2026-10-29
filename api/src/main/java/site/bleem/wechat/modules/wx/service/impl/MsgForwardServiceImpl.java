@@ -46,18 +46,21 @@ public class MsgForwardServiceImpl implements MsgForwardService {
 
     @Override
     public List<MsgReplyRule> matchRules(String appid, WxMpXmlMessage message) {
-        if (!WxConsts.EventType.SUBSCRIBE.equals(message.getEvent()) && !WxConsts.EventType.SCAN.equals(message.getEvent())) {
+        String event = message.getEvent();
+        boolean unsubscribe = WxConsts.EventType.UNSUBSCRIBE.equals(event);
+        if (!WxConsts.EventType.SUBSCRIBE.equals(event) && !WxConsts.EventType.SCAN.equals(event) && !unsubscribe) {
             return Collections.emptyList();
         }
         if (WxRawMessageHolder.get() == null) {
             log.warn("转发规则未生效：当前为加密消息，无法获取原始 XML，openid={}", message.getFromUser());
             return Collections.emptyList();
         }
+        // 取消关注没有场景值，直接按事件类型匹配；关注和扫码没有场景值时无法匹配
         String scene = extractScene(message);
-        if (!StringUtils.hasText(scene)) {
+        if (!unsubscribe && !StringUtils.hasText(scene)) {
             return Collections.emptyList();
         }
-        return msgReplyRuleService.getMatchedForwardRules(appid, message.getEvent(), scene);
+        return msgReplyRuleService.getMatchedForwardRules(appid, event, scene);
     }
 
     @Override

@@ -39,10 +39,10 @@ public class WxMpMessageRouterConfiguration {
         newRouter.rule().async(false).msgType(EVENT).event(KF_CREATE_SESSION).handler(this.kfSessionHandler).end();
         // 自定义菜单事件
         newRouter.rule().async(false).msgType(EVENT).event(EventType.CLICK).handler(this.menuHandler).end();
-        // 命中转发规则的扫码 / 关注事件：转发后结束路由，跳过本地的关注和扫码处理
+        // 命中转发规则的关注 / 扫码 / 取消关注事件：转发与下面的本地处理并行，所以这里不结束路由
         newRouter.rule().async(false).msgType(EVENT)
             .matcher(message -> !msgForwardService.matchRules(WxMpConfigStorageHolder.get(), message).isEmpty())
-            .handler(this.forwardHandler).end();
+            .handler(this.forwardHandler).next();
         // 关注事件
         newRouter.rule().async(false).msgType(EVENT).event(SUBSCRIBE).handler(this.subscribeHandler).end();
         // 取消关注事件

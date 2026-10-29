@@ -12,8 +12,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import me.chanjar.weixin.common.api.WxConsts;
+
 import java.time.LocalTime;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -103,17 +104,42 @@ public class MsgReplyRuleServiceImpl extends ServiceImpl<MsgReplyRuleMapper, Msg
 
     @Override
     public List<MsgReplyRule> getMatchedForwardRules(String appid, String eventType, String scene) {
-        if (!StringUtils.hasText(scene)) {
-            return new ArrayList<>();
-        }
         LocalTime now = LocalTime.now();
-        return this.getValidRules().stream()
-                .filter(rule->MsgReplyRule.REPLY_TYPE_FORWARD.equals(rule.getReplyType()))
+        return this.getValidForwardRules().stream()
                 .filter(rule->!StringUtils.hasText(rule.getAppid()) || appid.equals(rule.getAppid()))
-                .filter(rule->!StringUtils.hasText(rule.getEventType()) || rule.getEventType().equals(eventType))
                 .filter(rule->isEffectiveAt(rule, now))
-                .filter(rule->isMatchByMode(rule, scene))
+                .filter(rule->isForwardEventMatch(rule, eventType, scene))
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * 启用中的转发规则。取消关注允许没有匹配内容，所以这里不能复用 getValidRules 里对 match_value 的过滤。
+     */
+    private List<MsgReplyRule> getValidForwardRules() {
+        return msgReplyRuleMapper.selectList(
+            new QueryWrapper<MsgReplyRule>()
+                .eq("status", 1)
+                .eq("reply_type", MsgReplyRule.REPLY_TYPE_FORWARD)
+                .orderByDesc("priority"));
+    }
+
+    /**
+     * 转发规则是否命中当前事件。
+     *
+     * 取消关注没有场景值，只按事件类型匹配，规则必须显式选 unsubscribe，匹配内容不参与。
+     * 关注和扫码带场景值：规则的事件类型为空或与当前事件一致，且场景值按匹配方式命中。
+     */
+    private static boolean isForwardEventMatch(MsgReplyRule rule, String eventType, String scene) {
+        if (WxConsts.EventType.UNSUBSCRIBE.equals(eventType)) {
+            return WxConsts.EventType.UNSUBSCRIBE.equals(rule.getEventType());
+        }
+        if (!StringUtils.hasText(scene)) {
+            return false;
+        }
+        if (StringUtils.hasText(rule.getEventType()) && !rule.getEventType().equals(eventType)) {
+            return false;
+        }
+        return isMatchByMode(rule, scene);
     }
 
     private static boolean isEffectiveAt(MsgReplyRule rule, LocalTime now) {
