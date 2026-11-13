@@ -25,4 +25,13 @@ public class WxMiniUserLoginForm {
 
     /** wx.login 的临时凭证，与 miniOpenid 二选一，优先使用 */
     private String code;
+
+    /**
+     * 可选。启动链接带 {@code ?defaultCode=app_xxx} 时上报，登录时把它设为默认应用
+     * 并去重并入 appCodes。
+     *
+     * 走 code 登录时才有意义：openid 由服务端换取，调用方伪造不了。前端会先确认
+     * 这个 code 是本小程序已挂载的应用，后端不认识应用清单，只负责去重落库。
+     */
+    private String defaultCode;
 }

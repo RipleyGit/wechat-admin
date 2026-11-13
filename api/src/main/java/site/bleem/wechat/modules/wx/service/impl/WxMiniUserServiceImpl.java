@@ -126,6 +126,7 @@ public class WxMiniUserServiceImpl extends ServiceImpl<WxMiniUserMapper, WxMiniU
             user = new WxMiniUser(form.getMiniAppid(), miniOpenid, serviceAppid);
             user.setUnionid(unionid);
             linkServiceUser(user);
+            applyDefaultCode(user, form.getDefaultCode());
             this.save(user);
             logger.info("[小程序用户] 建档 appid={} openid={} unionid={}",
                     form.getMiniAppid(), miniOpenid, unionid);
@@ -145,10 +146,46 @@ public class WxMiniUserServiceImpl extends ServiceImpl<WxMiniUserMapper, WxMiniU
         if (!StringUtils.hasText(user.getServiceOpenid()) && linkServiceUser(user)) {
             dirty = true;
         }
+        if (applyDefaultCode(user, form.getDefaultCode())) {
+            dirty = true;
+        }
         if (dirty) {
             this.updateById(user);
         }
         return user;
+    }
+
+    /**
+     * 把启动链接带来的 defaultCode 落到档案上：去重并入 appCodes，再设为默认。
+     *
+     * 这是后台授权之外唯一允许小程序端写可见范围的路径（启动链接 ?defaultCode=），
+     * 只发生在 code 登录里，openid 由服务端换取、调用方伪造不了。前端已先校验
+     * 该 code 属于本小程序已挂载的应用；后端不认识应用清单，这里只做去重，
+     * 并维持「defaultCode 必须在 appCodes 内」这个不变量（updateByAdmin 也依赖它）。
+     *
+     * @return 档案是否有改动
+     */
+    private boolean applyDefaultCode(WxMiniUser user, String defaultCode) {
+        if (!StringUtils.hasText(defaultCode)) {
+            return false;
+        }
+
+        JSONArray appCodes = user.getAppCodes();
+        if (appCodes == null) {
+            appCodes = new JSONArray();
+            user.setAppCodes(appCodes);
+        }
+
+        boolean changed = false;
+        if (!appCodes.contains(defaultCode)) {
+            appCodes.add(defaultCode);
+            changed = true;
+        }
+        if (!defaultCode.equals(user.getDefaultCode())) {
+            user.setDefaultCode(defaultCode);
+            changed = true;
+        }
+        return changed;
     }
 
     @Override
