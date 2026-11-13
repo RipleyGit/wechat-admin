@@ -33,6 +33,10 @@ public class TemplateMsgLog implements Serializable {
     private JSONObject miniprogram;
     private Date sendTime;
     private String sendResult;
+    /** 关联 wx_push_batch.batch_id，通用推送网关写入 */
+    private String batchId;
+    /** api 通用推送网关 | manual 后台手动发 */
+    private String source;
 
     public TemplateMsgLog() {
     }
