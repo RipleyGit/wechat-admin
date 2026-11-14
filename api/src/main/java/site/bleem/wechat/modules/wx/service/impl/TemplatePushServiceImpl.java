@@ -478,7 +478,8 @@ public class TemplatePushServiceImpl implements TemplatePushService {
     }
 
     private void logTemplateMsg(WxMpTemplateMessage msg, String appid, String sendResult, String batchId) {
-        TemplateMsgLog logEntry = new TemplateMsgLog(msg, appid, sendResult);
+        // send_result 列是 varchar(255)，异常摘要可能更长
+        TemplateMsgLog logEntry = new TemplateMsgLog(msg, appid, truncate(sendResult, 255));
         logEntry.setBatchId(batchId);
         logEntry.setSource(WxPushBatch.SOURCE_API);
         templateMsgLogMapper.insert(logEntry);
@@ -494,7 +495,7 @@ public class TemplatePushServiceImpl implements TemplatePushService {
                 .miniProgram(miniProgram)
                 .data(data)
                 .build();
-        TemplateMsgLog logEntry = new TemplateMsgLog(msg, appid, "失败：" + brief(reason));
+        TemplateMsgLog logEntry = new TemplateMsgLog(msg, appid, truncate("失败：" + brief(reason), 255));
         logEntry.setBatchId(batchId);
         logEntry.setSource(WxPushBatch.SOURCE_API);
         templateMsgLogMapper.insert(logEntry);
@@ -512,7 +513,8 @@ public class TemplatePushServiceImpl implements TemplatePushService {
         batch.setStatus(WxPushBatch.STATUS_FAILED);
         batch.setRequestPayload(JSONObject.parseObject(JSON.toJSONString(form)));
         batch.setClientIp(clientIp);
-        batch.setUserAgent(userAgent);
+        // user_agent 列是 varchar(255)，UA 可能更长；严格模式下超长会让整条批次落库失败
+        batch.setUserAgent(truncate(userAgent, 255));
         batch.setRequestedCount(0);
         batch.setResolvedCount(0);
         batch.setSuccessCount(0);
@@ -521,7 +523,9 @@ public class TemplatePushServiceImpl implements TemplatePushService {
     }
 
     private String generateBatchId() {
-        return "b_" + UUID.randomUUID().toString().replace("-", "");
+        // wx_push_batch.batch_id 是 varchar(32)，uuid 去横线正好 32 位。
+        // 不要加前缀，严格模式下超长会让批次落库静默失败
+        return UUID.randomUUID().toString().replace("-", "");
     }
 
     private WxPushBatch findBatchByIdempotency(String appid, String clientMsgId) {
@@ -587,5 +591,12 @@ public class TemplatePushServiceImpl implements TemplatePushService {
             return "";
         }
         return message.length() > 480 ? message.substring(0, 480) : message;
+    }
+
+    private String truncate(String value, int max) {
+        if (value == null) {
+            return null;
+        }
+        return value.length() > max ? value.substring(0, max) : value;
     }
 }

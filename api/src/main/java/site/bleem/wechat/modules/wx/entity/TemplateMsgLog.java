@@ -46,8 +46,12 @@ public class TemplateMsgLog implements Serializable {
         this.touser = msg.getToUser();
         this.templateId = msg.getTemplateId();
         this.url = msg.getUrl();
-        this.miniprogram = JSONObject.parseObject(JSON.toJSONString(msg.getMiniProgram()));
-        this.data = JSONArray.parseArray(JSON.toJSONString(msg.getData()));
+        // JSON.toJSONString(null) 返回字符串 "null"，再 parseObject 会抛
+        // "illegal input, offset 1, char n"。没有小程序/数据时必须留空，不能直接 parse
+        this.miniprogram = msg.getMiniProgram() == null
+                ? null : JSONObject.parseObject(JSON.toJSONString(msg.getMiniProgram()));
+        this.data = msg.getData() == null
+                ? null : JSONArray.parseArray(JSON.toJSONString(msg.getData()));
         this.sendTime = new Date();
         this.sendResult = sendResult;
     }
