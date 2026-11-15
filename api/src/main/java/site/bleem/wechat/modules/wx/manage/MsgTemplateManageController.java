@@ -49,7 +49,7 @@ public class MsgTemplateManageController {
         params.put("appid",appid);
         PageUtils page = msgTemplateService.queryPage(params);
 
-        return R.ok().put("page", page);
+        return R.ok().put(page);
     }
 
 
@@ -62,7 +62,7 @@ public class MsgTemplateManageController {
     public R info(@PathVariable("id") Long id) {
         MsgTemplate msgTemplate = msgTemplateService.getById(id);
 
-        return R.ok().put("msgTemplate", msgTemplate);
+        return R.ok().put(msgTemplate);
     }
     /**
      * 信息
@@ -73,7 +73,7 @@ public class MsgTemplateManageController {
     public R getByName( String name){
         MsgTemplate msgTemplate = msgTemplateService.selectByName(name);
 
-        return R.ok().put("msgTemplate", msgTemplate);
+        return R.ok().put(msgTemplate);
     }
 
     /**

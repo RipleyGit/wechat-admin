@@ -62,7 +62,7 @@ async function loadUnread() {
   // 后台标签页不发请求，否则多开几个就是每 30s 好几个请求
   if (document.hidden) return
   try {
-    unread.value = (await api.msgUnreadCount()).count || 0
+    unread.value = (await api.msgUnreadCount()).data?.count || 0
   } catch {
     // 轮询失败不打扰用户，下一轮自己会好
   }

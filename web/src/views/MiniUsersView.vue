@@ -204,8 +204,8 @@ async function load() {
   loading.value = true
   try {
     const r = await api.miniUsers(params)
-    list.value = r.page.list
-    total.value = r.page.totalCount
+    list.value = r.data.list
+    total.value = r.data.totalCount
   } finally {
     loading.value = false
   }

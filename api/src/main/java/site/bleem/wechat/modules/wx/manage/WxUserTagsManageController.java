@@ -34,7 +34,7 @@ public class WxUserTagsManageController extends AbstractController {
     @ApiOperation(value = "列表")
     public R list(@CookieValue String appid) throws WxErrorException {
         List<WxUserTag> wxUserTags =  wxUserTagsService.getWxTags(appid);
-        return R.ok().put("list",wxUserTags);
+        return R.ok().put(wxUserTags);
     }
 
     /**
@@ -95,7 +95,7 @@ public class WxUserTagsManageController extends AbstractController {
     public R refreshTagCache(@CookieValue String appid) throws WxErrorException {
         wxUserTagsService.refreshTagCache(appid, getUser());
         List<WxUserTag> wxUserTags = wxUserTagsService.getWxTags(appid);
-        return R.ok().put("list", wxUserTags);
+        return R.ok().put(wxUserTags);
     }
 
 

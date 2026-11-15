@@ -42,7 +42,7 @@ public class TemplateMsgLogManageController {
         params.put("appid",appid);
         PageUtils page = templateMsgLogService.queryPage(params);
 
-        return R.ok().put("page", page);
+        return R.ok().put(page);
     }
 
 
@@ -55,7 +55,7 @@ public class TemplateMsgLogManageController {
     public R info(@CookieValue String appid,@PathVariable("logId") Integer logId) {
         TemplateMsgLog templateMsgLog = templateMsgLogService.getById(logId);
 
-        return R.ok().put("templateMsgLog", templateMsgLog);
+        return R.ok().put(templateMsgLog);
     }
 
     /**

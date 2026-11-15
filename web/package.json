@@ -13,6 +13,7 @@
     "axios": "^1.7.7",
     "benz-amr-recorder": "1.1.5",
     "element-plus": "^2.8.6",
+    "qrcode": "^1.5.4",
     "vue": "^3.5.12",
     "vue-router": "^4.4.5"
   },

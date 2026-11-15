@@ -106,8 +106,8 @@ curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18088/wx/notify/deploy-s
 网关的业务错误是 HTTP 200 + JSON 里的 `code`。脚本解析响应，以下情况打 `::warning::`，在 run 页面上能看到，run 结论仍是 success：
 
 - `code != 200`：密钥不对（401）、通道不存在（404）、通道未允许接口调用（403）
-- `skipped`：通道已停用
-- `successCount` 为 0 或 `failCount > 0`：没匹配到收件人、超出 48 小时窗口、微信接口报错等
+- `data.skipped`：通道已停用
+- `data.successCount` 为 0 或 `data.failCount > 0`：没匹配到收件人、超出 48 小时窗口、微信接口报错等
 
 注意通知打的是**公网 HTTPS 地址**，而不是就绪探测用的 loopback，还额外依赖 `wechat.bleem.site` 的 nginx 反代正常。
 

@@ -30,7 +30,7 @@ public class WxMiniUserManageController {
     @RequiresPermissions("wx:wxminiuser:list")
     @ApiOperation(value = "列表")
     public R list(@RequestParam Map<String, Object> params) {
-        return R.ok().put("page", wxMiniUserService.queryPage(params));
+        return R.ok().put(wxMiniUserService.queryPage(params));
     }
 
     @GetMapping("/info/{id}")

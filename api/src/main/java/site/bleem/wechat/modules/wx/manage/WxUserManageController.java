@@ -70,7 +70,7 @@ public class WxUserManageController {
         voPage.setRecords(records);
         PageUtils page = new PageUtils(voPage);
 
-        return R.ok().put("page", page);
+        return R.ok().put(page);
     }
 
     /**
@@ -94,7 +94,7 @@ public class WxUserManageController {
     public R info(@CookieValue String appid,@PathVariable("openid") String openid) {
         WxUser wxUser = userService.getById(openid);
 
-        return R.ok().put("wxUser", wxUser);
+        return R.ok().put(wxUser);
     }
 
     /**

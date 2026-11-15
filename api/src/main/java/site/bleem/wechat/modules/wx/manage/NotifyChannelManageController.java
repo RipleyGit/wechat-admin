@@ -1,6 +1,7 @@
 package site.bleem.wechat.modules.wx.manage;
 
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.Map;
 
 import com.alibaba.fastjson.JSONObject;
@@ -41,7 +42,7 @@ public class NotifyChannelManageController {
         params.put("appid", appid);
         PageUtils page = notifyService.queryPage(params);
 
-        return R.ok().put("page", page);
+        return R.ok().put(page);
     }
 
     /**
@@ -53,7 +54,7 @@ public class NotifyChannelManageController {
     public R info(@CookieValue String appid, @PathVariable("id") Long id) {
         NotifyChannel channel = notifyService.getById(id);
 
-        return R.ok().put("notifyChannel", belongsTo(channel, appid) ? channel : null);
+        return R.ok().put(belongsTo(channel, appid) ? channel : null);
     }
 
     /**
@@ -143,7 +144,10 @@ public class NotifyChannelManageController {
             vars = channel == null || channel.getLastPayload() == null ? new JSONObject() : channel.getLastPayload();
         }
 
-        return R.ok().put("content", notifyService.render(template, vars)).put("vars", vars);
+        Map<String, Object> data = new HashMap<>();
+        data.put("content", notifyService.render(template, vars));
+        data.put("vars", vars);
+        return R.ok().put(data);
     }
 
     /**
@@ -165,12 +169,13 @@ public class NotifyChannelManageController {
         NotifyLog result = notifyService.dispatch(channel,
                 vars == null ? new JSONObject() : vars, NotifyLog.SOURCE_MANUAL);
 
-        return R.ok()
-                .put("recipientCount", result.getRecipientCount())
-                .put("successCount", result.getSuccessCount())
-                .put("failCount", result.getFailCount())
-                .put("content", result.getContent())
-                .put("errorMsg", result.getErrorMsg());
+        Map<String, Object> data = new HashMap<>();
+        data.put("recipientCount", result.getRecipientCount());
+        data.put("successCount", result.getSuccessCount());
+        data.put("failCount", result.getFailCount());
+        data.put("content", result.getContent());
+        data.put("errorMsg", result.getErrorMsg());
+        return R.ok().put(data);
     }
 
     /**
@@ -183,7 +188,7 @@ public class NotifyChannelManageController {
         params.put("appid", appid);
         PageUtils page = notifyService.queryLogPage(params);
 
-        return R.ok().put("page", page);
+        return R.ok().put(page);
     }
 
     /**

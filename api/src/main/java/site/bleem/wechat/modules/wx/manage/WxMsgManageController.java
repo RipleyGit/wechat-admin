@@ -24,6 +24,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -59,7 +60,7 @@ public class WxMsgManageController extends AbstractController {
         params.put("appid",appid);
         PageUtils page = wxMsgService.queryPage(params);
 
-        return R.ok().put("page", page);
+        return R.ok().put(page);
     }
 
 
@@ -72,7 +73,7 @@ public class WxMsgManageController extends AbstractController {
     public R info(@CookieValue String appid,@PathVariable("id") Long id){
 		WxMsg wxMsg = wxMsgService.getById(id);
 
-        return R.ok().put("wxMsg", wxMsg);
+        return R.ok().put(wxMsg);
     }
 
     /**
@@ -103,7 +104,11 @@ public class WxMsgManageController extends AbstractController {
         int offset = Math.max(page - 1, 0) * limit;
         List<WxMsgSessionView> list = wxMsgSessionService.listSessions(appid, userId, keyword, offset, limit);
         long total = wxMsgSessionService.countSessions(appid, keyword);
-        return R.ok().put("list", list).put("total", total).put("pageSize", limit);
+        Map<String, Object> data = new HashMap<>();
+        data.put("list", list);
+        data.put("total", total);
+        data.put("pageSize", limit);
+        return R.ok().put(data);
     }
 
     /**
@@ -120,9 +125,11 @@ public class WxMsgManageController extends AbstractController {
         // 查询是按 id 倒序取的，翻页游标要在这一页的最老一条上
         Long nextCursor = list.size() < limit ? null : list.get(list.size() - 1).getId();
         Collections.reverse(list);
-        return R.ok().put("list", list)
-                .put("nextCursor", nextCursor)
-                .put("remainingWindowMillis", fanMessageService.remainingWindowMillis(appid, openid));
+        Map<String, Object> data = new HashMap<>();
+        data.put("list", list);
+        data.put("nextCursor", nextCursor);
+        data.put("remainingWindowMillis", fanMessageService.remainingWindowMillis(appid, openid));
+        return R.ok().put(data);
     }
 
     /**
@@ -144,7 +151,8 @@ public class WxMsgManageController extends AbstractController {
     @RequiresPermissions("wx:wxmsg:list")
     @ApiOperation(value = "未读私信会话数")
     public R unreadCount(@CookieValue String appid) {
-        return R.ok().put("count", wxMsgSessionService.countUnreadSessions(appid, getUserId()));
+        return R.ok().put(Collections.singletonMap("count",
+            wxMsgSessionService.countUnreadSessions(appid, getUserId())));
     }
 
     /**

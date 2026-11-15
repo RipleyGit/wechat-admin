@@ -38,7 +38,7 @@ public class ArticleManageController {
     public R list(@RequestParam Map<String, Object> params) {
         PageUtils page = articleService.queryPage(params);
 
-        return R.ok().put("page", page);
+        return R.ok().put(page);
     }
 
 
@@ -51,7 +51,7 @@ public class ArticleManageController {
     public R info(@PathVariable("id") Integer id) {
         Article article = articleService.getById(id);
 
-        return R.ok().put("article", article);
+        return R.ok().put(article);
     }
 
     /**

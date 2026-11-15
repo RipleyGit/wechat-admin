@@ -140,6 +140,24 @@
         </div>
       </el-form-item>
       <div v-else class="hint">保存后可在编辑配置里生成推送密钥</div>
+
+      <!-- 二维码里是一个 10 分钟有效的 token，手机扫码后匿名读取该公众号的接入信息 -->
+      <section v-if="editing" class="bind-qr">
+        <div class="bind-qr-head">
+          <span>扫码获取接入信息</span>
+          <el-button text :icon="Refresh" :loading="qrLoading" :disabled="!notifySecret" @click="loadQrcode">
+            刷新
+          </el-button>
+        </div>
+        <div class="bind-qr-body">
+          <img v-if="qrImage" :src="qrImage" alt="扫码获取接入信息" class="bind-qr-image" />
+          <div v-else class="bind-qr-empty">{{ qrEmptyText }}</div>
+          <div class="hint">
+            手机扫码后显示公众号名称、类型、推送地址和推送密钥。<br />
+            二维码 10 分钟内有效，过期点「刷新」重新生成。
+          </div>
+        </div>
+      </section>
     </el-form>
 
     <template #footer>
@@ -155,6 +173,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { CircleCheckFilled, DocumentCopy, EditPen, Plus, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import QRCode from 'qrcode'
 import { api } from '@/api/console'
 import { session } from '@/lib/session'
 import router from '@/router'
@@ -169,6 +188,15 @@ const encryptionMode = ref('aes')
 const form = reactive(emptyForm())
 const notifySecret = ref('')
 const regenerating = ref(false)
+const qrImage = ref('')
+const qrLoading = ref(false)
+const qrFailed = ref(false)
+
+const qrEmptyText = computed(() => {
+  if (!notifySecret.value) return '先生成推送密钥'
+  if (qrLoading.value) return '二维码生成中…'
+  return qrFailed.value ? '生成失败，点「刷新」重试' : ''
+})
 /** 小程序 AppSecret 后端只回「配过没有」，不回明文，所以单独记一个状态给占位符和提示用 */
 const miniSecretConfigured = ref(false)
 /** 点过「解除小程序关联」。只是个意图标记，真正生效要点保存 */
@@ -196,7 +224,7 @@ function emptyForm() {
 async function load() {
   loading.value = true
   try {
-    list.value = (await api.accounts()).list || []
+    list.value = (await api.accounts()).data || []
     selected.value = list.value.find((item) => item.appid === selected.value?.appid) || list.value[0] || null
   } finally {
     loading.value = false
@@ -208,17 +236,19 @@ function openCreate() {
   encryptionMode.value = 'aes'
   Object.assign(form, emptyForm())
   notifySecret.value = ''
+  qrImage.value = ''
   miniSecretConfigured.value = false
   miniCleared.value = false
   drawerOpen.value = true
 }
 
 async function openEdit(item) {
-  const [{ account }, secret] = await Promise.all([
+  const [accountRes, secretRes] = await Promise.all([
     api.accountConfig(item.appid),
     api.notifySecret(item.appid),
   ])
-  notifySecret.value = secret.notifySecret || ''
+  const account = accountRes.data
+  notifySecret.value = secretRes.data?.notifySecret || ''
   editing.value = true
   encryptionMode.value = account.aesKeyConfigured ? 'aes' : 'plain'
   miniSecretConfigured.value = !!account.miniSecretConfigured
@@ -236,6 +266,29 @@ async function openEdit(item) {
     miniSecret: '',
   })
   drawerOpen.value = true
+  loadQrcode()
+}
+
+/**
+ * 生成扫码用的二维码。token 由后台签发，10 分钟过期，所以每次打开抽屉或刷新密钥都重新生成。
+ * 没有密钥时后台会拒绝，这里直接留空提示先生成。
+ */
+async function loadQrcode() {
+  qrImage.value = ''
+  qrFailed.value = false
+  if (!editing.value || !notifySecret.value) return
+  qrLoading.value = true
+  try {
+    const { data } = await api.pushQrcode(form.appid)
+    qrImage.value = await QRCode.toDataURL(`${window.location.origin}/push-info/${data.token}`, {
+      width: 360,
+      margin: 1,
+    })
+  } catch {
+    qrFailed.value = true
+  } finally {
+    qrLoading.value = false
+  }
 }
 
 /**
@@ -294,8 +347,9 @@ async function regenerateSecret() {
   }
   regenerating.value = true
   try {
-    notifySecret.value = (await api.regenerateNotifySecret(form.appid)).notifySecret
+    notifySecret.value = (await api.regenerateNotifySecret(form.appid)).data?.notifySecret
     ElMessage.success('推送密钥已生成，记得同步到调用方')
+    loadQrcode()
   } finally {
     regenerating.value = false
   }
@@ -318,7 +372,7 @@ async function save() {
 
   saving.value = true
   try {
-    const { account } = await api.saveAccountConfig({
+    const { data: account } = await api.saveAccountConfig({
       ...form,
       clearAesKey: encryptionMode.value === 'plain',
       // 点过解除、并且之后没再填回内容，才真的让后端清空
@@ -376,6 +430,12 @@ footer { justify-content: flex-end; margin-top: 24px; }
 .secret-row { display: flex; gap: 8px; width: 100%; }
 .secret-row .el-input { flex: 1; }
 .mono :deep(input) { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.bind-qr { margin-top: 10px; padding: 14px; border: 1px solid #e6ebf2; border-radius: 8px; }
+.bind-qr-head { display: flex; align-items: center; justify-content: space-between; }
+.bind-qr-head span { color: #273248; font-size: 13px; }
+.bind-qr-body { display: flex; align-items: center; gap: 14px; margin-top: 8px; }
+.bind-qr-image { width: 148px; height: 148px; border: 1px solid #edf0f5; border-radius: 6px; }
+.bind-qr-empty { display: grid; place-items: center; width: 148px; height: 148px; padding: 10px; text-align: center; color: #a5afc0; font-size: 12px; background: #f7f8fa; border-radius: 6px; }
 .hint { margin-top: 6px; color: #8793a9; font-size: 12px; line-height: 1.6; }
 .hint code { color: #195e40; }
 </style>

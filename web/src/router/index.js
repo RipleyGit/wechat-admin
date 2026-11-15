@@ -5,6 +5,12 @@ const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue') },
+    {
+      // 手机扫码后打开，匿名可访问，靠 URL 里的短期 token 换取接入信息
+      path: '/push-info/:token',
+      name: 'pushInfo',
+      component: () => import('@/views/PushInfoView.vue'),
+    },
     { path: '/accounts', name: 'accounts', component: () => import('@/views/AccountSelectView.vue') },
     {
       path: '/',
@@ -25,9 +31,13 @@ const router = createRouter({
   ],
 })
 
+// 这两个页面不依赖登录态：登录页本身，以及扫码打开的接入信息页
+const PUBLIC_ROUTES = ['login', 'pushInfo']
+
 router.beforeEach((to) => {
-  if (to.name !== 'login' && !session.token) return { name: 'login' }
-  if (to.name !== 'login' && to.name !== 'accounts' && !session.account) return { name: 'accounts' }
+  if (PUBLIC_ROUTES.includes(to.name)) return
+  if (!session.token) return { name: 'login' }
+  if (to.name !== 'accounts' && !session.account) return { name: 'accounts' }
 })
 
 export default router

@@ -186,8 +186,9 @@ async function loadSessions(reset = true) {
   sessionLoading.value = true
   try {
     const r = await api.msgSessions({ keyword: keyword.value || undefined, page: sessionPage.value })
-    sessions.value = reset ? r.list || [] : [...sessions.value, ...(r.list || [])]
-    sessionTotal.value = r.total || 0
+    const d = r.data || {}
+    sessions.value = reset ? d.list || [] : [...sessions.value, ...(d.list || [])]
+    sessionTotal.value = d.total || 0
   } catch {
     if (reset) sessions.value = []
   } finally {
@@ -228,23 +229,24 @@ async function loadTimeline({ silent = false } = {}) {
   if (!silent) timelineLoading.value = true
   try {
     const r = await api.msgTimeline({ openid })
+    const d = r.data || {}
     // 轮询回来时用户可能已经切走了，别把别人的消息写进当前会话
     if (openid !== activeOpenid.value) return
-    const list = r.list || []
+    const list = d.list || []
     if (silent && timeline.value.length) {
       patchMediaUrls(list)
       const maxId = timeline.value.reduce((max, m) => (m.id > max ? m.id : max), 0)
       const fresh = list.filter((m) => m.id > maxId)
       if (!fresh.length) {
-        remainingWindow.value = r.remainingWindowMillis || 0
+        remainingWindow.value = d.remainingWindowMillis || 0
         return
       }
       timeline.value = [...timeline.value, ...fresh]
     } else {
       timeline.value = list
-      nextCursor.value = r.nextCursor || null
+      nextCursor.value = d.nextCursor || null
     }
-    remainingWindow.value = r.remainingWindowMillis || 0
+    remainingWindow.value = d.remainingWindowMillis || 0
     scrollToBottom()
     await markRead()
   } catch {
@@ -260,8 +262,8 @@ async function loadEarlier() {
   try {
     const r = await api.msgTimeline({ openid, beforeId: nextCursor.value })
     if (openid !== activeOpenid.value) return
-    timeline.value = [...(r.list || []), ...timeline.value]
-    nextCursor.value = r.nextCursor || null
+    timeline.value = [...(r.data.list || []), ...timeline.value]
+    nextCursor.value = r.data.nextCursor || null
   } catch {
     /* 拦截器已提示 */
   }

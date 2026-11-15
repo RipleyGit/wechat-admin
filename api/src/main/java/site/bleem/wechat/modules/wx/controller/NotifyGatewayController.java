@@ -18,6 +18,9 @@ import site.bleem.wechat.modules.wx.entity.WxAccount;
 import site.bleem.wechat.modules.wx.service.NotifyService;
 import site.bleem.wechat.modules.wx.service.WxAccountService;
 
+import java.util.HashMap;
+import java.util.Map;
+
 /**
  * 通用消息推送网关
  *
@@ -62,15 +65,19 @@ public class NotifyGatewayController {
         }
         if (!Boolean.TRUE.equals(channel.getEnabled())) {
             log.info("推送通道[{}]已停用，跳过", code);
-            return R.ok().put("successCount", 0).put("skipped", true);
+            Map<String, Object> skipped = new HashMap<>();
+            skipped.put("successCount", 0);
+            skipped.put("skipped", true);
+            return R.ok().put(skipped);
         }
 
         NotifyLog result = notifyService.dispatch(channel,
                 payload == null ? new JSONObject() : payload, NotifyLog.SOURCE_WEBHOOK);
-        return R.ok()
-                .put("recipientCount", result.getRecipientCount())
-                .put("successCount", result.getSuccessCount())
-                .put("failCount", result.getFailCount())
-                .put("errorMsg", result.getErrorMsg());
+        Map<String, Object> data = new HashMap<>();
+        data.put("recipientCount", result.getRecipientCount());
+        data.put("successCount", result.getSuccessCount());
+        data.put("failCount", result.getFailCount());
+        data.put("errorMsg", result.getErrorMsg());
+        return R.ok().put(data);
     }
 }

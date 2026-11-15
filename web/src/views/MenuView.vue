@@ -65,7 +65,7 @@ onMounted(async () => {
   menu.buttons = r.data?.menu?.buttons || r.data?.buttons || []
   try {
     const cfg = await api.accountConfig(account.value.appid)
-    miniAppid.value = cfg.data?.account?.miniAppid || ''
+    miniAppid.value = cfg.data?.miniAppid || ''
   } catch (e) {
     // 没配小程序或没有配置查看权限时不影响菜单编辑
   }

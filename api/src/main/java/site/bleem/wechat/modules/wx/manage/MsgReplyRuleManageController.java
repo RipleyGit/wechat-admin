@@ -43,7 +43,7 @@ public class MsgReplyRuleManageController {
         params.put("appid",appid);
         PageUtils page = msgReplyRuleService.queryPage(params);
 
-        return R.ok().put("page", page);
+        return R.ok().put(page);
     }
 
 
@@ -56,7 +56,7 @@ public class MsgReplyRuleManageController {
     public R info(@PathVariable("ruleId") Integer ruleId) {
         MsgReplyRule msgReplyRule = msgReplyRuleService.getById(ruleId);
 
-        return R.ok().put("msgReplyRule", msgReplyRule);
+        return R.ok().put(msgReplyRule);
     }
 
     /**

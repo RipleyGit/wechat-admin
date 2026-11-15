@@ -18,6 +18,10 @@ import site.bleem.wechat.modules.wx.entity.NotifyLog;
 import site.bleem.wechat.modules.wx.form.DeployWebhookForm;
 import site.bleem.wechat.modules.wx.service.NotifyService;
 
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+
 /**
  * 接收 GitHub Actions 部署结果回调（过渡期保留，准备下线）
  *
@@ -52,15 +56,18 @@ public class DeployWebhookController {
             // 迁移脚本漏了 seed。返回 200 是因为 deploy.yml 的通知步骤是 continue-on-error，
             // 报错也不会让部署失败，只会把真正的原因埋在 Actions 日志里
             log.error("部署通知通道[{}]不存在，请检查 wx_notify_channel 是否已初始化", code);
-            return R.ok().put("notifySent", 0).put("errorMsg", "channel not found: " + code);
+            Map<String, Object> data = new HashMap<>();
+            data.put("notifySent", 0);
+            data.put("errorMsg", "channel not found: " + code);
+            return R.ok().put(data);
         }
         if (!Boolean.TRUE.equals(channel.getEnabled())) {
             log.info("部署通知通道[{}]已停用，跳过", code);
-            return R.ok().put("notifySent", 0);
+            return R.ok().put(Collections.singletonMap("notifySent", 0));
         }
 
         NotifyLog result = notifyService.dispatch(channel, buildVars(form), NotifyLog.SOURCE_WEBHOOK);
-        return R.ok().put("notifySent", result.getSuccessCount());
+        return R.ok().put(Collections.singletonMap("notifySent", result.getSuccessCount()));
     }
 
     /**

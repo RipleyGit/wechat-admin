@@ -42,7 +42,7 @@ public class WxAccountManageController {
     public R list(){
         List<WxAccount> list = wxAccountService.list();
 
-        return R.ok().put("list", list);
+        return R.ok().put(list);
     }
 
 
@@ -54,7 +54,7 @@ public class WxAccountManageController {
     @ApiOperation(value = "详情")
     public R info(@PathVariable("appid") String appid){
 		WxAccount wxAccount = wxAccountService.getById(appid);
-        return R.ok().put("wxAccount", wxAccount);
+        return R.ok().put(wxAccount);
     }
 
     /**

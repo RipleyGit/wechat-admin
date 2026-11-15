@@ -56,7 +56,7 @@ public class WxQrCodeManageController {
         params.put("appid",appid);
         PageUtils page = wxQrCodeService.queryPage(params);
 
-        return R.ok().put("page", page);
+        return R.ok().put(page);
     }
 
 
@@ -69,7 +69,7 @@ public class WxQrCodeManageController {
     public R info(@CookieValue String appid,@PathVariable("id") Long id) {
         WxQrCode wxQrCode = wxQrCodeService.getById(id);
 
-        return R.ok().put("wxQrCode", wxQrCode);
+        return R.ok().put(wxQrCode);
     }
 
     /**

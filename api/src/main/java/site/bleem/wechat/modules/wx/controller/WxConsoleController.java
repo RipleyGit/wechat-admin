@@ -10,6 +10,7 @@ import site.bleem.wechat.modules.wx.entity.WxAccount;
 import site.bleem.wechat.modules.wx.service.WxAccountAccessService;
 import site.bleem.wechat.modules.wx.dto.WxAccountConfigView;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -25,7 +26,7 @@ public class WxConsoleController extends AbstractController {
     @GetMapping("/accounts")
     public R accounts() {
         List<WxAccount> accounts = wxAccountAccessService.getAccessibleAccounts(getUserId());
-        return R.ok().put("list", accounts.stream()
+        return R.ok().put(accounts.stream()
             .map(WxAccountConfigView::from)
             .collect(Collectors.toList()));
     }
@@ -33,6 +34,6 @@ public class WxConsoleController extends AbstractController {
     @GetMapping("/context")
     public R context(@CookieValue(value = "appid", required = false) String appid) {
         wxAccountAccessService.assertAccessible(getUserId(), appid);
-        return R.ok().put("appid", appid);
+        return R.ok().put(Collections.singletonMap("appid", appid));
     }
 }

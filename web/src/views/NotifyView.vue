@@ -250,8 +250,8 @@ async function load() {
   loading.value = true
   try {
     const r = await api.notifyChannels(params)
-    list.value = r.page.list
-    total.value = r.page.totalCount
+    list.value = r.data.list
+    total.value = r.data.totalCount
   } finally {
     loading.value = false
   }
@@ -260,7 +260,7 @@ async function load() {
 /** 标签列表只用来给「按标签」那个下拉做候选，取不到就退化成手填 */
 async function loadTags() {
   try {
-    tags.value = (await api.tags()).list || []
+    tags.value = (await api.tags()).data || []
   } catch {
     tags.value = []
   }
@@ -294,7 +294,7 @@ function edit(row) {
 async function loadMsgTemplates() {
   try {
     const r = await api.msgTemplates({ page: 1, limit: 100 })
-    msgTemplateList.value = r.page.list || []
+    msgTemplateList.value = r.data.list || []
   } catch {
     msgTemplateList.value = []
   }
@@ -370,8 +370,8 @@ async function save() {
  */
 async function preview() {
   const r = await api.previewNotify({ id: form.id, contentTemplate: form.contentTemplate })
-  previewText.value = r.content
-  const keys = Object.keys(r.vars || {})
+  previewText.value = r.data.content
+  const keys = Object.keys(r.data.vars || {})
   previewVarsHint.value = keys.length ? `用最近一次收到的变量：${keys.join('、')}` : '没有可用变量，占位符都会渲染成空'
 }
 
@@ -446,13 +446,14 @@ async function doSend() {
   try {
     const r = await api.sendNotify({ id: sendTarget.id, vars })
     // 一个人失败不代表整批失败，所以结果照实摊开，不用一句「成功」盖住
+    const d = r.data || {}
     sendResult.value = [
-      `收件人 ${r.recipientCount} 人，成功 ${r.successCount}，失败 ${r.failCount}`,
-      r.content ? `\n发送内容：\n${r.content}` : '',
-      r.errorMsg ? `\n错误：${r.errorMsg}` : '',
+      `收件人 ${d.recipientCount} 人，成功 ${d.successCount}，失败 ${d.failCount}`,
+      d.content ? `\n发送内容：\n${d.content}` : '',
+      d.errorMsg ? `\n错误：${d.errorMsg}` : '',
     ].join('')
-    if (r.failCount > 0) ElMessage.warning('部分或全部收件人发送失败')
-    else if (r.successCount > 0) ElMessage.success('已发送')
+    if (d.failCount > 0) ElMessage.warning('部分或全部收件人发送失败')
+    else if (d.successCount > 0) ElMessage.success('已发送')
   } finally {
     sending.value = false
   }
@@ -469,8 +470,8 @@ async function loadLogs() {
   logLoading.value = true
   try {
     const r = await api.notifyLogs(logParams)
-    logs.value = r.page.list
-    logTotal.value = r.page.totalCount
+    logs.value = r.data.list
+    logTotal.value = r.data.totalCount
   } finally {
     logLoading.value = false
   }

@@ -13,8 +13,8 @@ public interface WxMiniUserService extends IService<WxMiniUser> {
     /**
      * 后台列表分页。
      *
-     * 回 PageUtils 而不是裸 IPage：项目里其他列表接口都是 {@code R.ok().put("page", PageUtils)}，
-     * 前端一律按 {@code r.page.list / r.page.totalCount} 读。裸 IPage 会多出一层
+     * 回 PageUtils 而不是裸 IPage：项目里其他列表接口都是 {@code R.ok().put(page)}，
+     * 前端一律按 {@code r.data.list / r.data.totalCount} 读。裸 IPage 会多出一层
      * {@code records / total} 的字段名，让这一个页面的取值方式和其他页都不一样。
      */
     PageUtils queryPage(Map<String, Object> params);

@@ -182,12 +182,13 @@ jobs:
                   # 网关的业务错误是 HTTP 200 + JSON 里的 code，要看 code 才知道发没发出去；
                   # code=200 但一个都没发成功（没匹配到收件人、超出 48 小时窗口等）也要提示
                   result = json.loads(body)
+                  data = result.get('data') or {}
                   if result.get('code') != 200:
                       print(f"::warning::部署通知未发出：{result.get('msg')}")
-                  elif result.get('skipped'):
+                  elif data.get('skipped'):
                       print('::warning::部署通知通道已停用，未发送')
-                  elif not result.get('successCount') or result.get('failCount'):
-                      print(f"::warning::部署通知成功 {result.get('successCount')}/{result.get('recipientCount')}：{result.get('errorMsg') or ''}")
+                  elif not data.get('successCount') or data.get('failCount'):
+                      print(f"::warning::部署通知成功 {data.get('successCount')}/{data.get('recipientCount')}：{data.get('errorMsg') or ''}")
           except urllib.error.HTTPError as e:
               print(f'::warning::部署通知 HTTP 错误：{e.code} {e.reason}')
               print('Response body:', e.read().decode('utf-8', errors='replace'))
@@ -254,12 +255,13 @@ jobs:
                   body = resp.read().decode('utf-8')
                   print('Notify response:', body)
                   result = json.loads(body)
+                  data = result.get('data') or {}
                   if result.get('code') != 200:
                       print(f"::warning::部署通知未发出：{result.get('msg')}")
-                  elif result.get('skipped'):
+                  elif data.get('skipped'):
                       print('::warning::部署通知通道已停用，未发送')
-                  elif not result.get('successCount') or result.get('failCount'):
-                      print(f"::warning::部署通知成功 {result.get('successCount')}/{result.get('recipientCount')}：{result.get('errorMsg') or ''}")
+                  elif not data.get('successCount') or data.get('failCount'):
+                      print(f"::warning::部署通知成功 {data.get('successCount')}/{data.get('recipientCount')}：{data.get('errorMsg') or ''}")
           except urllib.error.HTTPError as e:
               print(f'::warning::部署通知 HTTP 错误：{e.code} {e.reason}')
               print('Response body:', e.read().decode('utf-8', errors='replace'))
