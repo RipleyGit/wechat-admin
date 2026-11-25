@@ -2,7 +2,7 @@
   <div class="page">
     <div class="page-head">
       <div>
-        <h1 class="page-title">消息推送</h1>
+        <h1 class="page-title">事件消息</h1>
         <div class="page-subtitle">配置通道后，机器可以 POST 网关地址触发推送，也能在这里手动发</div>
       </div>
       <div class="head-actions">
@@ -45,11 +45,12 @@
             <el-tag size="small" :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '停用' }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="230" fixed="right">
+        <el-table-column label="操作" width="290" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="edit(row)">编辑</el-button>
             <el-button link type="primary" @click="openSend(row)">发送</el-button>
             <el-button link type="primary" @click="openLogs(row)">记录</el-button>
+            <el-button link type="primary" @click="openQrcode(row)">二维码</el-button>
             <el-dropdown @command="(c) => moreAction(c, row)">
               <el-button link type="primary">更多<el-icon><ArrowDown /></el-icon></el-button>
               <template #dropdown>
@@ -208,6 +209,16 @@
                        :current-page="logParams.page" @current-change="(p) => { logParams.page = p; loadLogs() }" />
       </div>
     </el-dialog>
+    <el-dialog v-model="qrDialog" title="通道模板二维码" width="420">
+      <div class="qr-box">
+        <img v-if="qrImage" :src="qrImage" alt="通道模板二维码" class="qr-image" />
+        <div v-else class="qr-empty">{{ qrLoading ? '生成中…' : '生成失败，请重试' }}</div>
+      </div>
+      <div class="hint">
+        手机扫码查看通道「{{ qrChannel?.name || '' }}」的模板 ID、模板正文和字段映射。
+        二维码 10 分钟内有效，过期重新点一次即可。
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -215,6 +226,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown } from '@element-plus/icons-vue'
+import QRCode from 'qrcode'
 import { api } from '@/api/console'
 
 const list = ref([])
@@ -459,6 +471,29 @@ async function doSend() {
   }
 }
 
+const qrDialog = ref(false)
+const qrImage = ref('')
+const qrLoading = ref(false)
+const qrChannel = ref(null)
+
+async function openQrcode(row) {
+  qrChannel.value = row
+  qrDialog.value = true
+  qrImage.value = ''
+  qrLoading.value = true
+  try {
+    const { data } = await api.channelQrcode(row.id)
+    qrImage.value = await QRCode.toDataURL(`${origin}/channel-info/${data.token}`, {
+      width: 320,
+      margin: 1,
+    })
+  } catch {
+    // 错误提示由 http 拦截器统一弹出
+  } finally {
+    qrLoading.value = false
+  }
+}
+
 function openLogs(row) {
   logParams.channelCode = row ? row.code : ''
   logParams.page = 1
@@ -502,5 +537,9 @@ onMounted(() => {
 .preview { margin: 8px 0 0; padding: 10px 12px; background: #f5f7fb; border: 1px solid #e8ecf3; border-radius: 6px;
   font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-all; width: 100%; }
 .mb { margin-bottom: 16px; }
+.qr-box { display: grid; place-items: center; min-height: 300px; }
+.qr-image { width: 300px; height: 300px; border: 1px solid #edf0f5; border-radius: 8px; }
+.qr-empty { width: 300px; height: 300px; display: grid; place-items: center; background: #f7f8fa;
+  border-radius: 8px; color: #a5afc0; font-size: 13px; }
 .pager { display: flex; justify-content: flex-end; margin-top: 16px; }
 </style>

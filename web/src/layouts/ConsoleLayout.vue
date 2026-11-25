@@ -48,7 +48,7 @@ const nav = [
   { label: '粉丝私信', to: '/messages', icon: ChatLineRound, badge: true },
   { label: '自动回复', to: '/replies', icon: ChatDotRound },
   { label: '渠道二维码', to: '/qrcodes', icon: Tickets },
-  { label: '消息推送', to: '/notify', icon: BellFilled },
+  { label: '事件消息', to: '/notify', icon: BellFilled },
   // 小程序用户的维度是 mini_appid，和上面这些跟着 appid cookie 走的页面不是一回事，
   // 切换公众号不会改变这个页面的数据
   { label: '小程序用户', to: '/miniusers', icon: Cellphone },

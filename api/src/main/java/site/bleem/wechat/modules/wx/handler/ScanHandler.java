@@ -1,6 +1,7 @@
 package site.bleem.wechat.modules.wx.handler;
 
 import site.bleem.wechat.modules.wx.service.MsgReplyService;
+import site.bleem.wechat.modules.wx.service.ScanSessionService;
 import me.chanjar.weixin.common.session.WxSessionManager;
 import me.chanjar.weixin.mp.api.WxMpService;
 import me.chanjar.weixin.mp.bean.message.WxMpXmlMessage;
@@ -18,6 +19,8 @@ import java.util.Map;
 public class ScanHandler extends AbstractHandler {
     @Autowired
     MsgReplyService msgReplyService;
+    @Autowired
+    ScanSessionService scanSessionService;
 
     @Override
     public WxMpXmlOutMessage handle(WxMpXmlMessage wxMpXmlMessage, Map<String, Object> map,
@@ -27,6 +30,8 @@ public class ScanHandler extends AbstractHandler {
         String scene = extractQrScene(wxMpXmlMessage.getEventKey());
         this.logger.info("用户扫描带参二维码 OPENID: " + wxMpXmlMessage.getFromUser() + "，场景值：" + scene);
         String appid = WxMpConfigStorageHolder.get();
+        // 扫码识别用户：只对 /wx/scan/qrcode 签发的场景值生效，其他场景值内部会忽略
+        scanSessionService.record(appid, scene, wxMpXmlMessage.getFromUser());
         msgReplyService.tryAutoReply(appid, true, wxMpXmlMessage.getFromUser(), scene);
 
         return null;

@@ -9,14 +9,20 @@ import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import lombok.RequiredArgsConstructor;
 import org.apache.shiro.authz.annotation.RequiresPermissions;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 import site.bleem.wechat.common.utils.PageUtils;
 import site.bleem.wechat.common.utils.R;
+import site.bleem.wechat.modules.wx.controller.ChannelInfoController;
 import site.bleem.wechat.modules.wx.entity.NotifyChannel;
 import site.bleem.wechat.modules.wx.entity.NotifyLog;
 import site.bleem.wechat.modules.wx.service.NotifyService;
+
+import java.time.Duration;
+import java.util.Collections;
+import java.util.UUID;
 
 /**
  * 消息推送通道-管理后台
@@ -31,6 +37,7 @@ import site.bleem.wechat.modules.wx.service.NotifyService;
 @Api(tags = {"消息推送通道-管理后台"})
 public class NotifyChannelManageController {
     private final NotifyService notifyService;
+    private final RedisTemplate<String, Object> redisTemplate;
 
     /**
      * 列表
@@ -55,6 +62,26 @@ public class NotifyChannelManageController {
         NotifyChannel channel = notifyService.getById(id);
 
         return R.ok().put(belongsTo(channel, appid) ? channel : null);
+    }
+
+    /**
+     * 生成通道模板二维码的 token
+     *
+     * 二维码指向 /channel-info/{token}，扫码看到模板 ID、模板正文和字段映射。
+     * 通道数据不敏感，给和查看详情一样的权限即可。
+     */
+    @GetMapping("/{id}/qrcode")
+    @RequiresPermissions("wx:notifychannel:info")
+    @ApiOperation(value = "生成通道模板二维码")
+    public R qrcode(@CookieValue String appid, @PathVariable("id") Long id) {
+        NotifyChannel channel = notifyService.getById(id);
+        if (!belongsTo(channel, appid)) {
+            return R.error("通道不存在");
+        }
+        String token = UUID.randomUUID().toString().replace("-", "");
+        redisTemplate.opsForValue().set(ChannelInfoController.TOKEN_KEY + token, id,
+            ChannelInfoController.TOKEN_TTL);
+        return R.ok().put(Collections.singletonMap("token", token));
     }
 
     /**

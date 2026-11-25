@@ -11,9 +11,6 @@ export const api = {
   saveAccountConfig: (data) => http.post('/manage/console/account-config', data),
   notifySecret: (appid) => http.get(`/manage/console/account-config/${appid}/notify-secret`),
   regenerateNotifySecret: (appid) => http.post(`/manage/console/account-config/${appid}/notify-secret`),
-  // 扫码绑定：token 由后台生成，手机端匿名读取（/wx/push-info/{token}），失败只影响本页，不弹全局提示
-  pushQrcode: (appid) => http.get(`/manage/console/account-config/${appid}/push-qrcode`),
-  pushInfo: (token) => http.get(`/push-info/${token}`, { silent: true }),
   followers: (params) => http.get('/manage/wxUser/list', { params }),
   syncFollowers: () => http.post('/manage/wxUser/syncWxUsers'),
   setFollowerRemark: (data) => http.post('/manage/wxUser/updateRemark', data),
@@ -47,6 +44,9 @@ export const api = {
   previewNotify: (data) => http.post('/manage/notifyChannel/preview', data),
   sendNotify: (data) => http.post('/manage/notifyChannel/send', data),
   notifyLogs: (params) => http.get('/manage/notifyChannel/logs', { params }),
+  // 通道模板二维码：token 换成公开页 /channel-info/{token} 的内容
+  channelQrcode: (id) => http.get(`/manage/notifyChannel/${id}/qrcode`),
+  channelInfo: (token) => http.get(`/channel-info/${token}`, { silent: true }),
   msgTemplates: (params) => http.get('/manage/msgTemplate/list', { params }),
   syncMsgTemplates: () => http.post('/manage/msgTemplate/syncWxTemplate'),
   // 小程序用户。update 是 PUT、delete 是 DELETE，和本文件其他条目清一色 POST 不同，

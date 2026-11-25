@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 
 import site.bleem.wechat.modules.wx.service.WxUserService;
 import site.bleem.wechat.modules.wx.service.MsgReplyService;
+import site.bleem.wechat.modules.wx.service.ScanSessionService;
 import me.chanjar.weixin.common.session.WxSessionManager;
 import me.chanjar.weixin.mp.api.WxMpService;
 import me.chanjar.weixin.mp.bean.message.WxMpXmlMessage;
@@ -23,6 +24,8 @@ public class SubscribeHandler extends AbstractHandler {
     MsgReplyService msgReplyService;
     @Autowired
     WxUserService userService;
+    @Autowired
+    ScanSessionService scanSessionService;
 
     @Override
     public WxMpXmlOutMessage handle(WxMpXmlMessage wxMessage, Map<String, Object> context, WxMpService wxMpService,
@@ -39,6 +42,8 @@ public class SubscribeHandler extends AbstractHandler {
             // 扫码关注的 EventKey 带 qrscene_ 前缀，剥掉后才能和 SCAN 事件用同一条规则
             String scene = extractQrScene(wxMessage.getEventKey());
             this.logger.info("扫码关注，场景值：{}", scene);
+            // 扫码识别用户：未关注的人扫码会先落到关注页，关注完成后才走到这里
+            scanSessionService.record(appid, scene, wxMessage.getFromUser());
             msgReplyService.tryAutoReply(appid, true, wxMessage.getFromUser(), scene);
         }
         return null;

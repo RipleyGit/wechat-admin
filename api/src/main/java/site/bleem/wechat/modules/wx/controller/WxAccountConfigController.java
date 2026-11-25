@@ -25,9 +25,6 @@ import site.bleem.wechat.modules.wx.service.WxAccountService;
 
 import java.util.Collections;
 import java.util.Date;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.UUID;
 
 /**
  * 运营台公众号接入配置。密钥仅用于保存，不会被接口返回。
@@ -145,34 +142,6 @@ public class WxAccountConfigController extends AbstractController {
         }
         return R.ok().put(Collections.singletonMap("notifySecret",
             wxAccountService.regenerateNotifySecret(appid)));
-    }
-
-    /**
-     * 生成扫码绑定用的 token，运营台据此渲染二维码。
-     *
-     * token 只活 10 分钟，扫码后由 PushInfoController 换取公众号信息和推送密钥。
-     * 和查看密钥一样要求保存权限：能拿到二维码的人就能拿到密钥。
-     */
-    @GetMapping("/{appid}/push-qrcode")
-    @RequiresPermissions("wx:wxaccount:save")
-    public R pushQrcode(@PathVariable String appid) {
-        wxAccountAccessService.assertAccessible(getUserId(), appid);
-        WxAccount account = wxAccountService.getById(appid);
-        if (account == null) {
-            throw new RRException("公众号不存在", 404);
-        }
-        if (!StringUtils.hasText(account.getNotifySecret())) {
-            throw new RRException("请先生成推送密钥", 400);
-        }
-
-        String token = UUID.randomUUID().toString().replace("-", "");
-        redisTemplate.opsForValue().set(PushInfoController.BIND_KEY + token, appid,
-            PushInfoController.BIND_TTL);
-
-        Map<String, Object> data = new LinkedHashMap<>();
-        data.put("token", token);
-        data.put("expiresIn", PushInfoController.BIND_TTL.getSeconds());
-        return R.ok().put(data);
     }
 
     /**

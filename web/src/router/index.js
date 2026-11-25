@@ -6,10 +6,10 @@ const router = createRouter({
   routes: [
     { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue') },
     {
-      // 手机扫码后打开，匿名可访问，靠 URL 里的短期 token 换取接入信息
-      path: '/push-info/:token',
-      name: 'pushInfo',
-      component: () => import('@/views/PushInfoView.vue'),
+      // 通道模板二维码，扫码匿名查看
+      path: '/channel-info/:token',
+      name: 'channelInfo',
+      component: () => import('@/views/ChannelInfoView.vue'),
     },
     { path: '/accounts', name: 'accounts', component: () => import('@/views/AccountSelectView.vue') },
     {
@@ -31,8 +31,8 @@ const router = createRouter({
   ],
 })
 
-// 这两个页面不依赖登录态：登录页本身，以及扫码打开的接入信息页
-const PUBLIC_ROUTES = ['login', 'pushInfo']
+// 这些页面不依赖登录态：登录页本身，以及扫码打开的通道信息页
+const PUBLIC_ROUTES = ['login', 'channelInfo']
 
 router.beforeEach((to) => {
   if (PUBLIC_ROUTES.includes(to.name)) return
