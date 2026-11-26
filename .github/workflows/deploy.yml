@@ -199,40 +199,82 @@ jobs:
           set -o pipefail
           echo "== 上传 web（$(du -sh release/web | cut -f1)）=="
           start=$(date +%s)
+          # web 包小但同样可能卡在 DERP 中继上，加 300 秒上限，超时即失败，不静默挂死
           tar -C release/web -czf - . | \
-            ssh $SSH_OPTS -p "$PORT" "$target" "tar -xzf - -C '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web'"
+            timeout 300 ssh $SSH_OPTS -p "$PORT" "$target" "tar -xzf - -C '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web'"
           echo "web 完成，用时 $(( $(date +%s) - start ))s"
 
           # jar 有 70MB+，在 DERP 中继上单个长管道容易中途卡死（tar 无进度输出，
-          # 看不出是慢还是死）。切成 8MB 分块逐个上传：每块独立超时 + 重试，
+          # 看不出是慢还是死）。切成 4MB 分块上传：每块独立超时 + 重试，
           # 某一块卡住只重传那一块，不必从头再来。
-          CHUNK_SIZE=$((8 * 1024 * 1024))
+          # 再加 4 路并行：DERP 中继常对单条连接限速，多条并行流能绕过单流上限；
+          # 单块超时从 300 秒降到 120 秒——卡死的块早该放弃重试，而不是干等 5 分钟。
+          CHUNK_SIZE=$((4 * 1024 * 1024))
           CHUNK_DIR=/tmp/wx-api-chunks
+          CHUNK_TIMEOUT=120
+          PARALLEL=4
           rm -rf "$CHUNK_DIR" && mkdir -p "$CHUNK_DIR"
           split -b "$CHUNK_SIZE" release/api/wx-api.jar "$CHUNK_DIR/part."
           chunk_total=$(ls -1 "$CHUNK_DIR" | wc -l)
-          echo "== 上传 api jar（$(du -sh release/api/wx-api.jar | cut -f1)，分 $chunk_total 块）=="
+          echo "== 上传 api jar（$(du -sh release/api/wx-api.jar | cut -f1)，分 $chunk_total 块，每块 4MB，$PARALLEL 路并行，单块超时 ${CHUNK_TIMEOUT}s）=="
           start=$(date +%s)
-          idx=0
-          for f in "$CHUNK_DIR"/part.*; do
-            idx=$((idx + 1))
+
+          upload_chunk() {
+            local f="$1" idx="$2" name size attempt t0 t1 elapsed rate
             name=$(basename "$f")
-            ok=0
+            size=$(wc -c < "$f" | tr -d ' ')
             for attempt in 1 2 3; do
-              if timeout 300 ssh $SSH_OPTS -p "$PORT" "$target" \
+              t0=$(date +%s)
+              if timeout "$CHUNK_TIMEOUT" ssh $SSH_OPTS -p "$PORT" "$target" \
                 "cat > '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/$name'" < "$f"; then
-                ok=1
-                break
+                t1=$(date +%s)
+                elapsed=$((t1 - t0))
+                [ "$elapsed" -eq 0 ] && elapsed=1
+                rate=$((size / elapsed / 1024))
+                echo "  分块 $idx/$chunk_total ($name, ${size}B) 第 $attempt 次成功，用时 ${elapsed}s，约 ${rate} KB/s"
+                return 0
               fi
-              echo "  分块 $idx/$chunk_total ($name) 第 $attempt 次失败，重试"
+              t1=$(date +%s)
+              elapsed=$((t1 - t0))
+              echo "  分块 $idx/$chunk_total ($name) 第 $attempt 次失败（用时 ${elapsed}s），重试"
               sleep 3
             done
-            if [ "$ok" -ne 1 ]; then
-              echo "::error::分块 $idx/$chunk_total ($name) 上传失败：链路不可用"
-              exit 1
+            echo "::error::分块 $idx/$chunk_total ($name) 上传失败：3 次均超时或断开"
+            return 1
+          }
+
+          # 每批 PARALLEL 块并行上传；一批里最慢的那块决定本批耗时。
+          # 任一块 3 次都失败则整步失败，不再继续传后面的块，省时间。
+          idx=0
+          batch=0
+          failed=0
+          pids=""
+          for f in "$CHUNK_DIR"/part.*; do
+            idx=$((idx + 1))
+            upload_chunk "$f" "$idx" &
+            pids="$pids $!"
+            batch=$((batch + 1))
+            if [ "$batch" -ge "$PARALLEL" ]; then
+              for pid in $pids; do
+                wait "$pid" || failed=1
+              done
+              pids=""
+              batch=0
+              if [ "$failed" -ne 0 ]; then
+                break
+              fi
             fi
-            echo "  分块 $idx/$chunk_total 完成（累计 $(( $(date +%s) - start ))s）"
           done
+          if [ "$failed" -eq 0 ]; then
+            for pid in $pids; do
+              wait "$pid" || failed=1
+            done
+          fi
+          if [ "$failed" -ne 0 ]; then
+            echo '::error::部分分块上传失败：链路不可用'
+            exit 1
+          fi
+          echo "api 分块上传完成，用时 $(( $(date +%s) - start ))s"
           # 按分块顺序拼回完整 jar，并校验字节数一致（防止某块被截断却仍返回 0）
           local_size=$(wc -c < release/api/wx-api.jar | tr -d ' ')
           ssh $SSH_OPTS -p "$PORT" "$target" \
