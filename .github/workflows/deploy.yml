@@ -65,8 +65,9 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     environment: production
-    # 走 Tailscale 公网中继时 rsync/ssh 可能长时间挂起，限制 job 总时长，避免占用默认的 6 小时
-    timeout-minutes: 30
+    # 走 Tailscale 中继（DERP）时上传 70MB 的 jar 可能较慢，留足余量；
+    # 真正的挂死由各步骤自己的 timeout 快速失败，不依赖这个总时长
+    timeout-minutes: 45
     steps:
       - name: Download web artifact
         id: download_web
@@ -147,9 +148,22 @@ jobs:
           RELEASE_ID: ${{ github.sha }}
         run: |
           PORT="${NAS_DEPLOY_PORT:-22}"
-          # 预检：区分 ssh 连接/认证失败（退出码 255）与 NAS 上没有 tar
+          # BatchMode 禁止任何交互式提示：否则 ssh 会从 tar 的数据流里"读密码"，直接挂死；
+          # ServerAlive 让链路真死时 30 秒内失败，而不是干等到 job 超时。
+          SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=10 -o ServerAliveCountMax=3"
+          target="$NAS_DEPLOY_USER@$NAS_DEPLOY_HOST"
+
+          # 链路诊断：确认是直连还是 DERP 中继，以及 tailscale0 的 MTU
+          echo '== Tailscale status =='
+          sudo -n tailscale status || tailscale status || true
+          echo '== Tailscale netcheck =='
+          sudo -n tailscale netcheck || tailscale netcheck || true
+          echo '== tailscale0 MTU =='
+          ip -4 addr show tailscale0 2>/dev/null || true
+
+          echo '== 预检：ssh 与 tar =='
           set +e
-          ssh -p "$PORT" "$NAS_DEPLOY_USER@$NAS_DEPLOY_HOST" 'command -v tar >/dev/null'
+          ssh $SSH_OPTS -p "$PORT" "$target" 'command -v tar >/dev/null'
           rc=$?
           set -e
           if [ "$rc" -eq 255 ]; then
@@ -160,16 +174,76 @@ jobs:
             echo '::error::NAS 上未找到 tar，无法打包上传'
             exit 1
           fi
-          ssh -p "$PORT" "$NAS_DEPLOY_USER@$NAS_DEPLOY_HOST" \
+
+          # 吞吐探测：1MB 走一遍同一条 ssh 通道，能在传大文件前就暴露链路问题
+          echo '== 吞吐探测：上传 1MB =='
+          head -c 1048576 /dev/zero > /tmp/probe.bin
+          set +e
+          start=$(date +%s)
+          timeout 90 ssh $SSH_OPTS -p "$PORT" "$target" 'cat > /dev/null' < /tmp/probe.bin
+          prc=$?
+          end=$(date +%s)
+          set -e
+          echo "probe: exit=$prc elapsed=$((end - start))s"
+          if [ "$prc" -ne 0 ]; then
+            echo '::error::向 NAS 传输 1MB 失败或超时，链路不可用（Tailscale 走 DERP 中继且 MTU 不匹配时典型症状）'
+            exit 1
+          fi
+
+          ssh $SSH_OPTS -p "$PORT" "$target" \
             "mkdir -p '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api' '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web'"
+
           # 用 tar over ssh 上传，不依赖 NAS 端的 rsync。
           # 每次发布都写入全新的 .deploy/RELEASE_ID 目录，不需要 rsync 的 --delete；
           # 而 DSM 上的 rsync-over-SSH 出现过协议握手阶段直接断开（code 12）的兼容问题。
           set -o pipefail
+          echo "== 上传 web（$(du -sh release/web | cut -f1)）=="
+          start=$(date +%s)
           tar -C release/web -czf - . | \
-            ssh -p "$PORT" "$NAS_DEPLOY_USER@$NAS_DEPLOY_HOST" "tar -xzf - -C '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web'"
-          tar -C release/api -czf - wx-api.jar | \
-            ssh -p "$PORT" "$NAS_DEPLOY_USER@$NAS_DEPLOY_HOST" "tar -xzf - -C '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api'"
+            ssh $SSH_OPTS -p "$PORT" "$target" "tar -xzf - -C '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web'"
+          echo "web 完成，用时 $(( $(date +%s) - start ))s"
+
+          # jar 有 70MB+，在 DERP 中继上单个长管道容易中途卡死（tar 无进度输出，
+          # 看不出是慢还是死）。切成 8MB 分块逐个上传：每块独立超时 + 重试，
+          # 某一块卡住只重传那一块，不必从头再来。
+          CHUNK_SIZE=$((8 * 1024 * 1024))
+          CHUNK_DIR=/tmp/wx-api-chunks
+          rm -rf "$CHUNK_DIR" && mkdir -p "$CHUNK_DIR"
+          split -b "$CHUNK_SIZE" release/api/wx-api.jar "$CHUNK_DIR/part."
+          chunk_total=$(ls -1 "$CHUNK_DIR" | wc -l)
+          echo "== 上传 api jar（$(du -sh release/api/wx-api.jar | cut -f1)，分 $chunk_total 块）=="
+          start=$(date +%s)
+          idx=0
+          for f in "$CHUNK_DIR"/part.*; do
+            idx=$((idx + 1))
+            name=$(basename "$f")
+            ok=0
+            for attempt in 1 2 3; do
+              if timeout 300 ssh $SSH_OPTS -p "$PORT" "$target" \
+                "cat > '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/$name'" < "$f"; then
+                ok=1
+                break
+              fi
+              echo "  分块 $idx/$chunk_total ($name) 第 $attempt 次失败，重试"
+              sleep 3
+            done
+            if [ "$ok" -ne 1 ]; then
+              echo "::error::分块 $idx/$chunk_total ($name) 上传失败：链路不可用"
+              exit 1
+            fi
+            echo "  分块 $idx/$chunk_total 完成（累计 $(( $(date +%s) - start ))s）"
+          done
+          # 按分块顺序拼回完整 jar，并校验字节数一致（防止某块被截断却仍返回 0）
+          local_size=$(wc -c < release/api/wx-api.jar | tr -d ' ')
+          ssh $SSH_OPTS -p "$PORT" "$target" \
+            "set -e
+            cd '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api'
+            cat part.* > wx-api.jar
+            rm -f part.*
+            test -s wx-api.jar
+            remote_size=\$(wc -c < wx-api.jar | tr -d ' ')
+            [ \"\$remote_size\" = '$local_size' ] || { echo \"jar 大小不一致：本地 $local_size 远端 \$remote_size\" >&2; exit 1; }"
+          echo "api 完成，用时 $(( $(date +%s) - start ))s"
 
       # DSM 没有 systemd，原来的 systemctl restart / is-active 已移除。
       # 重启与服务状态检查统一交给 NAS_RESTART_COMMAND（在 NAS 上执行，失败必须返回非 0），例如：
