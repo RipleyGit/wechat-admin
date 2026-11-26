@@ -147,17 +147,29 @@ jobs:
           RELEASE_ID: ${{ github.sha }}
         run: |
           PORT="${NAS_DEPLOY_PORT:-22}"
-          # 预检：rsync 需要 NAS 端也有 rsync 二进制（DSM 不保证默认在 PATH 里）
-          ssh -p "$PORT" "$NAS_DEPLOY_USER@$NAS_DEPLOY_HOST" 'command -v rsync >/dev/null' || {
-            echo '::error::NAS 上未找到 rsync，请先在 DSM 上启用/安装 rsync，或改用 scp 上传'
+          # 预检：区分 ssh 连接/认证失败（退出码 255）与 NAS 上没有 tar
+          set +e
+          ssh -p "$PORT" "$NAS_DEPLOY_USER@$NAS_DEPLOY_HOST" 'command -v tar >/dev/null'
+          rc=$?
+          set -e
+          if [ "$rc" -eq 255 ]; then
+            echo '::error::SSH 连接或认证失败：检查 NAS 上该用户的 authorized_keys、用户组与家目录权限'
             exit 1
-          }
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo '::error::NAS 上未找到 tar，无法打包上传'
+            exit 1
+          fi
           ssh -p "$PORT" "$NAS_DEPLOY_USER@$NAS_DEPLOY_HOST" \
             "mkdir -p '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api' '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web'"
-          rsync -az --delete -e "ssh -p $PORT" \
-            release/web/ "$NAS_DEPLOY_USER@$NAS_DEPLOY_HOST:$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web/"
-          rsync -az -e "ssh -p $PORT" \
-            release/api/wx-api.jar "$NAS_DEPLOY_USER@$NAS_DEPLOY_HOST:$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar"
+          # 用 tar over ssh 上传，不依赖 NAS 端的 rsync。
+          # 每次发布都写入全新的 .deploy/RELEASE_ID 目录，不需要 rsync 的 --delete；
+          # 而 DSM 上的 rsync-over-SSH 出现过协议握手阶段直接断开（code 12）的兼容问题。
+          set -o pipefail
+          tar -C release/web -czf - . | \
+            ssh -p "$PORT" "$NAS_DEPLOY_USER@$NAS_DEPLOY_HOST" "tar -xzf - -C '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web'"
+          tar -C release/api -czf - wx-api.jar | \
+            ssh -p "$PORT" "$NAS_DEPLOY_USER@$NAS_DEPLOY_HOST" "tar -xzf - -C '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api'"
 
       # DSM 没有 systemd，原来的 systemctl restart / is-active 已移除。
       # 重启与服务状态检查统一交给 NAS_RESTART_COMMAND（在 NAS 上执行，失败必须返回非 0），例如：
