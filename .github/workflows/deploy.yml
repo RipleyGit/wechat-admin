@@ -63,11 +63,12 @@ jobs:
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build
-    runs-on: ubuntu-24.04
+    # 自托管 runner 就在 NAS 本机上：构建仍在 GitHub 托管 runner 上做，
+    # deploy 只做下载构件 + 本地拷贝 + 本地重启，不再走 Tailscale/DERP/SSH
+    runs-on: [self-hosted, nas]
     environment: production
-    # 走 Tailscale 中继（DERP）时上传 70MB 的 jar 可能较慢，留足余量；
-    # 真正的挂死由各步骤自己的 timeout 快速失败，不依赖这个总时长
-    timeout-minutes: 45
+    # runner 不在线时任务会排队等，15 分钟没跑起来就失败，不无限挂着
+    timeout-minutes: 15
     steps:
       - name: Download web artifact
         id: download_web
@@ -85,207 +86,42 @@ jobs:
 
       # 迁移到 NAS 后，原来指向云服务器的 DEPLOY_HOST/DEPLOY_USER/DEPLOY_PATH/DEPLOY_PORT
       # 已全部改为 NAS_ 前缀；缺任何一个 NAS_* secret 都尽早失败，避免继续部署到旧地址
+      # NAS_DEPLOY_PATH / NAS_RESTART_COMMAND 仍走 secrets（只是路径和命令，
+      # 不再含 SSH/Tailscale 凭据）；部署目录必须已挂载进 runner 容器，
+      # 且路径和这里的 NAS_DEPLOY_PATH 完全一致
       - name: Validate NAS deploy configuration
         id: validate
         env:
-          NAS_DEPLOY_HOST: ${{ secrets.NAS_DEPLOY_HOST }}
-          NAS_DEPLOY_USER: ${{ secrets.NAS_DEPLOY_USER }}
           NAS_DEPLOY_PATH: ${{ secrets.NAS_DEPLOY_PATH }}
           NAS_RESTART_COMMAND: ${{ secrets.NAS_RESTART_COMMAND }}
-          NAS_DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.NAS_DEPLOY_SSH_PRIVATE_KEY }}
-          NAS_DEPLOY_KNOWN_HOSTS: ${{ secrets.NAS_DEPLOY_KNOWN_HOSTS }}
         run: |
           missing=''
-          [ -n "$NAS_DEPLOY_HOST" ] || missing="$missing NAS_DEPLOY_HOST"
-          [ -n "$NAS_DEPLOY_USER" ] || missing="$missing NAS_DEPLOY_USER"
           [ -n "$NAS_DEPLOY_PATH" ] || missing="$missing NAS_DEPLOY_PATH"
           [ -n "$NAS_RESTART_COMMAND" ] || missing="$missing NAS_RESTART_COMMAND"
-          [ -n "$NAS_DEPLOY_SSH_PRIVATE_KEY" ] || missing="$missing NAS_DEPLOY_SSH_PRIVATE_KEY"
-          [ -n "$NAS_DEPLOY_KNOWN_HOSTS" ] || missing="$missing NAS_DEPLOY_KNOWN_HOSTS"
           if [ -n "$missing" ]; then
-            echo "::error::缺少必要的 NAS 部署 Secrets:$missing"
+            echo "::error::缺少必要的 NAS 部署配置:$missing"
             exit 1
           fi
-
-      # 只有 deploy job 需要进 tailnet：GitHub 托管的 runner 是公网节点，
-      # 通过 Tailscale OAuth 客户端以 tag:ci 身份接入，ACL 只需放行 tag:ci -> tag:nas:22。
-      # ping 会在 tailscale up 之后等待 NAS 可达（直连或 DERP 中继，最多约 3 分钟）。
-      - name: Connect to Tailscale
-        id: tailscale
-        uses: tailscale/github-action@v4
-        with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-          tags: tag:ci
-          ping: ${{ secrets.NAS_DEPLOY_HOST }}
-
-      # 沿用密钥认证。NAS_DEPLOY_KNOWN_HOSTS 必须是 NAS Tailscale IP 的主机公钥。
-      # 在 tailnet 内且有 OpenSSH 的机器上可执行：ssh-keyscan -p 22 100.97.151.65
-      # DSM 自带的 shell 没有 ssh-keyscan，也可以直接在 NAS 上读主机公钥生成：
-      #   sudo awk '{print "100.97.151.65", $1, $2}' /etc/ssh/ssh_host_*_key.pub
-      # 端口不是 22 时，行首用 [ip]:port 形式，ssh-keyscan 的输出也是这个格式。
-      # NAS_DEPLOY_SSH_PRIVATE_KEY 是专用部署私钥的完整内容（含 BEGIN/END 行），
-      # 对应公钥装进 NAS 上 ripley-nas 的 ~/.ssh/authorized_keys。
-      - name: Configure deployment SSH key
-        id: configure_ssh
-        env:
-          NAS_DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.NAS_DEPLOY_SSH_PRIVATE_KEY }}
-          NAS_DEPLOY_KNOWN_HOSTS: ${{ secrets.NAS_DEPLOY_KNOWN_HOSTS }}
-        run: |
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$NAS_DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          printf '%s\n' "$NAS_DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
+          [ -d "$NAS_DEPLOY_PATH" ] || { echo "::error::部署目录不存在: $NAS_DEPLOY_PATH（检查 runner 容器的挂载路径是否和这个一致）"; exit 1; }
 
       - name: Upload release files
         id: upload
         env:
-          NAS_DEPLOY_HOST: ${{ secrets.NAS_DEPLOY_HOST }}
-          NAS_DEPLOY_PORT: ${{ secrets.NAS_DEPLOY_PORT }}
-          NAS_DEPLOY_USER: ${{ secrets.NAS_DEPLOY_USER }}
           NAS_DEPLOY_PATH: ${{ secrets.NAS_DEPLOY_PATH }}
           RELEASE_ID: ${{ github.sha }}
         run: |
-          PORT="${NAS_DEPLOY_PORT:-22}"
-          # BatchMode 禁止任何交互式提示：否则 ssh 会从 tar 的数据流里"读密码"，直接挂死；
-          # ServerAlive 让链路真死时 30 秒内失败，而不是干等到 job 超时。
-          SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=10 -o ServerAliveCountMax=3"
-          target="$NAS_DEPLOY_USER@$NAS_DEPLOY_HOST"
-
-          # 链路诊断：确认是直连还是 DERP 中继，以及 tailscale0 的 MTU
-          echo '== Tailscale status =='
-          sudo -n tailscale status || tailscale status || true
-          echo '== Tailscale netcheck =='
-          sudo -n tailscale netcheck || tailscale netcheck || true
-          echo '== tailscale0 MTU =='
-          ip -4 addr show tailscale0 2>/dev/null || true
-
-          echo '== 预检：ssh 与 tar =='
-          set +e
-          ssh $SSH_OPTS -p "$PORT" "$target" 'command -v tar >/dev/null'
-          rc=$?
+          # 自托管 runner 就在 NAS 上：构件从 GitHub 直下到 runner 工作目录，
+          # 再本地 cp 到部署目录，不再走 Tailscale/SSH，也不再需要分块、重试和超时
           set -e
-          if [ "$rc" -eq 255 ]; then
-            echo '::error::SSH 连接或认证失败：检查 NAS 上该用户的 authorized_keys、用户组与家目录权限'
-            exit 1
-          fi
-          if [ "$rc" -ne 0 ]; then
-            echo '::error::NAS 上未找到 tar，无法打包上传'
-            exit 1
-          fi
-
-          # 吞吐探测：1MB 走一遍同一条 ssh 通道，能在传大文件前就暴露链路问题
-          echo '== 吞吐探测：上传 1MB =='
-          head -c 1048576 /dev/zero > /tmp/probe.bin
-          set +e
-          start=$(date +%s)
-          timeout 90 ssh $SSH_OPTS -p "$PORT" "$target" 'cat > /dev/null' < /tmp/probe.bin
-          prc=$?
-          end=$(date +%s)
-          set -e
-          echo "probe: exit=$prc elapsed=$((end - start))s"
-          if [ "$prc" -ne 0 ]; then
-            echo '::error::向 NAS 传输 1MB 失败或超时，链路不可用（Tailscale 走 DERP 中继且 MTU 不匹配时典型症状）'
-            exit 1
-          fi
-
-          ssh $SSH_OPTS -p "$PORT" "$target" \
-            "mkdir -p '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api' '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web'"
-
-          # 用 tar over ssh 上传，不依赖 NAS 端的 rsync。
-          # 每次发布都写入全新的 .deploy/RELEASE_ID 目录，不需要 rsync 的 --delete；
-          # 而 DSM 上的 rsync-over-SSH 出现过协议握手阶段直接断开（code 12）的兼容问题。
-          set -o pipefail
-          echo "== 上传 web（$(du -sh release/web | cut -f1)）=="
-          start=$(date +%s)
-          # web 包小但同样可能卡在 DERP 中继上，加 300 秒上限，超时即失败，不静默挂死
-          tar -C release/web -czf - . | \
-            timeout 300 ssh $SSH_OPTS -p "$PORT" "$target" "tar -xzf - -C '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web'"
-          echo "web 完成，用时 $(( $(date +%s) - start ))s"
-
-          # jar 有 70MB+，在 DERP 中继上单个长管道容易中途卡死（tar 无进度输出，
-          # 看不出是慢还是死）。切成 4MB 分块上传：每块独立超时 + 重试，
-          # 某一块卡住只重传那一块，不必从头再来。
-          # 再加 4 路并行：DERP 中继常对单条连接限速，多条并行流能绕过单流上限；
-          # 单块超时从 300 秒降到 120 秒——卡死的块早该放弃重试，而不是干等 5 分钟。
-          CHUNK_SIZE=$((4 * 1024 * 1024))
-          CHUNK_DIR=/tmp/wx-api-chunks
-          CHUNK_TIMEOUT=120
-          PARALLEL=4
-          rm -rf "$CHUNK_DIR" && mkdir -p "$CHUNK_DIR"
-          split -b "$CHUNK_SIZE" release/api/wx-api.jar "$CHUNK_DIR/part."
-          chunk_total=$(ls -1 "$CHUNK_DIR" | wc -l)
-          echo "== 上传 api jar（$(du -sh release/api/wx-api.jar | cut -f1)，分 $chunk_total 块，每块 4MB，$PARALLEL 路并行，单块超时 ${CHUNK_TIMEOUT}s）=="
-          start=$(date +%s)
-
-          upload_chunk() {
-            local f="$1" idx="$2" name size attempt t0 t1 elapsed rate
-            name=$(basename "$f")
-            size=$(wc -c < "$f" | tr -d ' ')
-            for attempt in 1 2 3; do
-              t0=$(date +%s)
-              if timeout "$CHUNK_TIMEOUT" ssh $SSH_OPTS -p "$PORT" "$target" \
-                "cat > '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/$name'" < "$f"; then
-                t1=$(date +%s)
-                elapsed=$((t1 - t0))
-                [ "$elapsed" -eq 0 ] && elapsed=1
-                rate=$((size / elapsed / 1024))
-                echo "  分块 $idx/$chunk_total ($name, ${size}B) 第 $attempt 次成功，用时 ${elapsed}s，约 ${rate} KB/s"
-                return 0
-              fi
-              t1=$(date +%s)
-              elapsed=$((t1 - t0))
-              echo "  分块 $idx/$chunk_total ($name) 第 $attempt 次失败（用时 ${elapsed}s），重试"
-              sleep 3
-            done
-            echo "::error::分块 $idx/$chunk_total ($name) 上传失败：3 次均超时或断开"
-            return 1
-          }
-
-          # 每批 PARALLEL 块并行上传；一批里最慢的那块决定本批耗时。
-          # 任一块 3 次都失败则整步失败，不再继续传后面的块，省时间。
-          idx=0
-          batch=0
-          failed=0
-          pids=""
-          for f in "$CHUNK_DIR"/part.*; do
-            idx=$((idx + 1))
-            upload_chunk "$f" "$idx" &
-            pids="$pids $!"
-            batch=$((batch + 1))
-            if [ "$batch" -ge "$PARALLEL" ]; then
-              for pid in $pids; do
-                wait "$pid" || failed=1
-              done
-              pids=""
-              batch=0
-              if [ "$failed" -ne 0 ]; then
-                break
-              fi
-            fi
-          done
-          if [ "$failed" -eq 0 ]; then
-            for pid in $pids; do
-              wait "$pid" || failed=1
-            done
-          fi
-          if [ "$failed" -ne 0 ]; then
-            echo '::error::部分分块上传失败：链路不可用'
-            exit 1
-          fi
-          echo "api 分块上传完成，用时 $(( $(date +%s) - start ))s"
-          # 按分块顺序拼回完整 jar，并校验字节数一致（防止某块被截断却仍返回 0）
-          local_size=$(wc -c < release/api/wx-api.jar | tr -d ' ')
-          ssh $SSH_OPTS -p "$PORT" "$target" \
-            "set -e
-            cd '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api'
-            cat part.* > wx-api.jar
-            rm -f part.*
-            test -s wx-api.jar
-            remote_size=\$(wc -c < wx-api.jar | tr -d ' ')
-            [ \"\$remote_size\" = '$local_size' ] || { echo \"jar 大小不一致：本地 $local_size 远端 \$remote_size\" >&2; exit 1; }"
-          echo "api 完成，用时 $(( $(date +%s) - start ))s"
+          rm -rf "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID"
+          mkdir -p "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api" "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web"
+          echo "== 拷贝 web（$(du -sh release/web | cut -f1)）=="
+          cp -r release/web/. "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web/"
+          echo "== 拷贝 api jar（$(du -sh release/api/wx-api.jar | cut -f1)）=="
+          cp release/api/wx-api.jar "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar"
+          test -s "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar"
+          test -f "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web/index.html"
+          echo "拷贝完成"
 
       # DSM 没有 systemd，原来的 systemctl restart / is-active 已移除。
       # 重启与服务状态检查统一交给 NAS_RESTART_COMMAND（在 NAS 上执行，失败必须返回非 0），例如：
@@ -299,9 +135,6 @@ jobs:
       - name: Activate release
         id: activate
         env:
-          NAS_DEPLOY_HOST: ${{ secrets.NAS_DEPLOY_HOST }}
-          NAS_DEPLOY_PORT: ${{ secrets.NAS_DEPLOY_PORT }}
-          NAS_DEPLOY_USER: ${{ secrets.NAS_DEPLOY_USER }}
           NAS_DEPLOY_PATH: ${{ secrets.NAS_DEPLOY_PATH }}
           NAS_RESTART_COMMAND: ${{ secrets.NAS_RESTART_COMMAND }}
           NAS_HEALTHCHECK_URL: ${{ secrets.NAS_HEALTHCHECK_URL }}
@@ -311,28 +144,28 @@ jobs:
             echo '::error::NAS_RESTART_COMMAND secret 未配置：DSM 没有 systemd，必须指定服务重启命令'
             exit 1
           fi
-          PORT="${NAS_DEPLOY_PORT:-22}"
-          HEALTHCHECK_URL="${NAS_HEALTHCHECK_URL:-http://127.0.0.1:18088/wx/notify/deploy-success}"
-          ssh -p "$PORT" "$NAS_DEPLOY_USER@$NAS_DEPLOY_HOST" \
-            "set -eu
-            test -s '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar'
-            test -f '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web/index.html'
-            rm -rf '$NAS_DEPLOY_PATH/web.previous'
-            test ! -e '$NAS_DEPLOY_PATH/web' || mv '$NAS_DEPLOY_PATH/web' '$NAS_DEPLOY_PATH/web.previous'
-            mv '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web' '$NAS_DEPLOY_PATH/web'
-            test ! -e '$NAS_DEPLOY_PATH/wechat-admin.previous.jar' || rm -f '$NAS_DEPLOY_PATH/wechat-admin.previous.jar'
-            test ! -e '$NAS_DEPLOY_PATH/wechat-admin.jar' || mv '$NAS_DEPLOY_PATH/wechat-admin.jar' '$NAS_DEPLOY_PATH/wechat-admin.previous.jar'
-            mv '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar' '$NAS_DEPLOY_PATH/wechat-admin.jar'
-            $NAS_RESTART_COMMAND
-            ready=0
-            for i in \$(seq 1 30); do
-              code=\$(curl -s -o /dev/null -w '%{http_code}' '$HEALTHCHECK_URL' -X POST \
-                -H 'Content-Type: application/json' -H 'X-Notify-Secret: x' -d '{}' || true)
-              if [ \"\$code\" != '000' ] && [ -n \"\$code\" ]; then ready=1; break; fi
-              sleep 2
-            done
-            [ \"\$ready\" -eq 1 ] || { echo 'service did not become ready in time'; exit 1; }
-            rm -rf '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID'"
+          # 注意：runner 跑在容器里，这里的 127.0.0.1 是容器自己，不是 NAS 本机；
+          # 健康检查默认打 NAS 的 Tailscale IP
+          HEALTHCHECK_URL="${NAS_HEALTHCHECK_URL:-http://100.97.151.65:18088/wx/notify/deploy-success}"
+          set -eu
+          test -s "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar"
+          test -f "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web/index.html"
+          rm -rf "$NAS_DEPLOY_PATH/web.previous"
+          test ! -e "$NAS_DEPLOY_PATH/web" || mv "$NAS_DEPLOY_PATH/web" "$NAS_DEPLOY_PATH/web.previous"
+          mv "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web" "$NAS_DEPLOY_PATH/web"
+          test ! -e "$NAS_DEPLOY_PATH/wechat-admin.previous.jar" || rm -f "$NAS_DEPLOY_PATH/wechat-admin.previous.jar"
+          test ! -e "$NAS_DEPLOY_PATH/wechat-admin.jar" || mv "$NAS_DEPLOY_PATH/wechat-admin.jar" "$NAS_DEPLOY_PATH/wechat-admin.previous.jar"
+          mv "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar" "$NAS_DEPLOY_PATH/wechat-admin.jar"
+          $NAS_RESTART_COMMAND
+          ready=0
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$HEALTHCHECK_URL" -X POST \
+              -H 'Content-Type: application/json' -H 'X-Notify-Secret: x' -d '{}' || true)
+            if [ "$code" != '000' ] && [ -n "$code" ]; then ready=1; break; fi
+            sleep 2
+          done
+          [ "$ready" -eq 1 ] || { echo 'service did not become ready in time'; exit 1; }
+          rm -rf "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID"
 
       # 通知走通用推送网关：请求头里的公众号推送密钥决定发到哪个公众号，
       # 地址里的通道标识决定用哪套收件人和文案（在后台「消息推送」页面配置）
