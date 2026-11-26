@@ -26,7 +26,6 @@ Java 8 + Spring Boot + MyBatis-Plus + Shiro + MySQL，前端在 `web/`。
 | 软链 | 指向 | 什么时候进去改 |
 |------|------|--------------|
 | `portal-app/` | `~/Documents/ripleygit.git/portal-wechat-app` | 需求涉及**门户小程序端**（页面、组件、`config.ts`、资料表单、工作台）时 |
-| `pco-code/` | `~/Documents/neoflux-teams/pco-mgr` | 需求涉及 **pco 子应用后端**（工单、合同、报告）时 |
 
 所以一个需求同时要动后端和小程序端时，**不要在本仓库里造小程序代码**，
 而是进 `portal-app/` 改那边的真实文件。pco 子应用的小程序代码还要再往里一层，
@@ -57,7 +56,7 @@ git -C ~/Documents/ripleygit.git/portal-wechat-app commit -am "..." && git push 
 跨仓库的提交顺序、submodule 的 detached HEAD 陷阱（`git submodule update` 会让
 子应用脱离 `main`，在那个状态下提交会丢），见 `portal-app/.kiro/steering/git-workflow.md`。
 
-推 `main` 会触发 GitHub Actions 自动部署到生产（见 `docs/deploy-notify-pipeline.md`），
+推 `main` 会触发 GitHub Actions 自动部署到生产（见 `.docs/deploy-notify-pipeline.md`），
 所以推送前先把校验跑通：本仓库 `mvn compile`（**JDK 8**，见下节）、
 前端 `cd web && npm run build`、小程序端 `npm run verify`。
 
@@ -140,4 +139,4 @@ location /wx/ { proxy_pass http://<host>:18088; }   # 结尾不要带斜杠
 带斜杠会把 `/wx` 剥掉，Spring 收到 `/wxMiniUser/login` 直接 404。
 线上配置是服务器上的 `https_wechat.conf`（不在 `bleem-nginx` 仓库里）。
 
-部署通知相关见 `docs/deploy-notify-pipeline.md`。
+部署通知相关见 `.docs/deploy-notify-pipeline.md`。

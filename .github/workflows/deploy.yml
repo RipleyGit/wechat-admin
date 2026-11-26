@@ -65,6 +65,8 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     environment: production
+    # 走 Tailscale 公网中继时 rsync/ssh 可能长时间挂起，限制 job 总时长，避免占用默认的 6 小时
+    timeout-minutes: 30
     steps:
       - name: Download web artifact
         id: download_web
@@ -80,64 +82,129 @@ jobs:
           name: api-jar
           path: release/api
 
+      # 迁移到 NAS 后，原来指向云服务器的 DEPLOY_HOST/DEPLOY_USER/DEPLOY_PATH/DEPLOY_PORT
+      # 已全部改为 NAS_ 前缀；缺任何一个 NAS_* secret 都尽早失败，避免继续部署到旧地址
+      - name: Validate NAS deploy configuration
+        id: validate
+        env:
+          NAS_DEPLOY_HOST: ${{ secrets.NAS_DEPLOY_HOST }}
+          NAS_DEPLOY_USER: ${{ secrets.NAS_DEPLOY_USER }}
+          NAS_DEPLOY_PATH: ${{ secrets.NAS_DEPLOY_PATH }}
+          NAS_RESTART_COMMAND: ${{ secrets.NAS_RESTART_COMMAND }}
+          NAS_DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.NAS_DEPLOY_SSH_PRIVATE_KEY }}
+          NAS_DEPLOY_KNOWN_HOSTS: ${{ secrets.NAS_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          missing=''
+          [ -n "$NAS_DEPLOY_HOST" ] || missing="$missing NAS_DEPLOY_HOST"
+          [ -n "$NAS_DEPLOY_USER" ] || missing="$missing NAS_DEPLOY_USER"
+          [ -n "$NAS_DEPLOY_PATH" ] || missing="$missing NAS_DEPLOY_PATH"
+          [ -n "$NAS_RESTART_COMMAND" ] || missing="$missing NAS_RESTART_COMMAND"
+          [ -n "$NAS_DEPLOY_SSH_PRIVATE_KEY" ] || missing="$missing NAS_DEPLOY_SSH_PRIVATE_KEY"
+          [ -n "$NAS_DEPLOY_KNOWN_HOSTS" ] || missing="$missing NAS_DEPLOY_KNOWN_HOSTS"
+          if [ -n "$missing" ]; then
+            echo "::error::缺少必要的 NAS 部署 Secrets:$missing"
+            exit 1
+          fi
+
+      # 只有 deploy job 需要进 tailnet：GitHub 托管的 runner 是公网节点，
+      # 通过 Tailscale OAuth 客户端以 tag:ci 身份接入，ACL 只需放行 tag:ci -> tag:nas:22。
+      # ping 会在 tailscale up 之后等待 NAS 可达（直连或 DERP 中继，最多约 3 分钟）。
+      - name: Connect to Tailscale
+        id: tailscale
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+          ping: ${{ secrets.NAS_DEPLOY_HOST }}
+
+      # 沿用密钥认证。NAS_DEPLOY_KNOWN_HOSTS 必须是 NAS Tailscale IP 的主机公钥。
+      # 在 tailnet 内且有 OpenSSH 的机器上可执行：ssh-keyscan -p 22 100.97.151.65
+      # DSM 自带的 shell 没有 ssh-keyscan，也可以直接在 NAS 上读主机公钥生成：
+      #   sudo awk '{print "100.97.151.65", $1, $2}' /etc/ssh/ssh_host_*_key.pub
+      # 端口不是 22 时，行首用 [ip]:port 形式，ssh-keyscan 的输出也是这个格式。
+      # NAS_DEPLOY_SSH_PRIVATE_KEY 是专用部署私钥的完整内容（含 BEGIN/END 行），
+      # 对应公钥装进 NAS 上 ripley-nas 的 ~/.ssh/authorized_keys。
       - name: Configure deployment SSH key
         id: configure_ssh
         env:
-          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          NAS_DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.NAS_DEPLOY_SSH_PRIVATE_KEY }}
+          NAS_DEPLOY_KNOWN_HOSTS: ${{ secrets.NAS_DEPLOY_KNOWN_HOSTS }}
         run: |
           install -d -m 700 ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$NAS_DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          printf '%s\n' "$NAS_DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
       - name: Upload release files
         id: upload
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          NAS_DEPLOY_HOST: ${{ secrets.NAS_DEPLOY_HOST }}
+          NAS_DEPLOY_PORT: ${{ secrets.NAS_DEPLOY_PORT }}
+          NAS_DEPLOY_USER: ${{ secrets.NAS_DEPLOY_USER }}
+          NAS_DEPLOY_PATH: ${{ secrets.NAS_DEPLOY_PATH }}
           RELEASE_ID: ${{ github.sha }}
         run: |
-          ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "mkdir -p '$DEPLOY_PATH/.deploy/$RELEASE_ID/api' '$DEPLOY_PATH/.deploy/$RELEASE_ID/web'"
-          rsync -az --delete -e "ssh -p $DEPLOY_PORT" \
-            release/web/ "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/.deploy/$RELEASE_ID/web/"
-          rsync -az -e "ssh -p $DEPLOY_PORT" \
-            release/api/wx-api.jar "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar"
+          PORT="${NAS_DEPLOY_PORT:-22}"
+          # 预检：rsync 需要 NAS 端也有 rsync 二进制（DSM 不保证默认在 PATH 里）
+          ssh -p "$PORT" "$NAS_DEPLOY_USER@$NAS_DEPLOY_HOST" 'command -v rsync >/dev/null' || {
+            echo '::error::NAS 上未找到 rsync，请先在 DSM 上启用/安装 rsync，或改用 scp 上传'
+            exit 1
+          }
+          ssh -p "$PORT" "$NAS_DEPLOY_USER@$NAS_DEPLOY_HOST" \
+            "mkdir -p '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api' '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web'"
+          rsync -az --delete -e "ssh -p $PORT" \
+            release/web/ "$NAS_DEPLOY_USER@$NAS_DEPLOY_HOST:$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web/"
+          rsync -az -e "ssh -p $PORT" \
+            release/api/wx-api.jar "$NAS_DEPLOY_USER@$NAS_DEPLOY_HOST:$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar"
 
+      # DSM 没有 systemd，原来的 systemctl restart / is-active 已移除。
+      # 重启与服务状态检查统一交给 NAS_RESTART_COMMAND（在 NAS 上执行，失败必须返回非 0），例如：
+      #   sudo /volume1/docker/wechat-admin/restart.sh
+      #   docker restart wechat-admin
+      #   sudo synopkg restart wechat-admin
+      # 健康检查在 NAS 本机执行，127.0.0.1 指向 NAS 自身（与原 workflow 一致：
+      # 原来也是通过 ssh 在服务器本机探测，并非公网探测）。
+      # 服务若跑在 Docker 中，需确认端口已映射到宿主机；
+      # 想验证公网链路可把 NAS_HEALTHCHECK_URL 改成公网地址，但必须先确认域名已切到 NAS。
       - name: Activate release
         id: activate
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          NAS_DEPLOY_HOST: ${{ secrets.NAS_DEPLOY_HOST }}
+          NAS_DEPLOY_PORT: ${{ secrets.NAS_DEPLOY_PORT }}
+          NAS_DEPLOY_USER: ${{ secrets.NAS_DEPLOY_USER }}
+          NAS_DEPLOY_PATH: ${{ secrets.NAS_DEPLOY_PATH }}
+          NAS_RESTART_COMMAND: ${{ secrets.NAS_RESTART_COMMAND }}
+          NAS_HEALTHCHECK_URL: ${{ secrets.NAS_HEALTHCHECK_URL }}
           RELEASE_ID: ${{ github.sha }}
         run: |
-          ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+          if [ -z "${NAS_RESTART_COMMAND:-}" ]; then
+            echo '::error::NAS_RESTART_COMMAND secret 未配置：DSM 没有 systemd，必须指定服务重启命令'
+            exit 1
+          fi
+          PORT="${NAS_DEPLOY_PORT:-22}"
+          HEALTHCHECK_URL="${NAS_HEALTHCHECK_URL:-http://127.0.0.1:18088/wx/notify/deploy-success}"
+          ssh -p "$PORT" "$NAS_DEPLOY_USER@$NAS_DEPLOY_HOST" \
             "set -eu
-            test -s '$DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar'
-            test -f '$DEPLOY_PATH/.deploy/$RELEASE_ID/web/index.html'
-            rm -rf '$DEPLOY_PATH/web.previous'
-            test ! -e '$DEPLOY_PATH/web' || mv '$DEPLOY_PATH/web' '$DEPLOY_PATH/web.previous'
-            mv '$DEPLOY_PATH/.deploy/$RELEASE_ID/web' '$DEPLOY_PATH/web'
-            test ! -e '$DEPLOY_PATH/wechat-admin.previous.jar' || rm -f '$DEPLOY_PATH/wechat-admin.previous.jar'
-            test ! -e '$DEPLOY_PATH/wechat-admin.jar' || mv '$DEPLOY_PATH/wechat-admin.jar' '$DEPLOY_PATH/wechat-admin.previous.jar'
-            mv '$DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar' '$DEPLOY_PATH/wechat-admin.jar'
-            systemctl restart wechat-admin
-            systemctl is-active --quiet wechat-admin
+            test -s '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar'
+            test -f '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web/index.html'
+            rm -rf '$NAS_DEPLOY_PATH/web.previous'
+            test ! -e '$NAS_DEPLOY_PATH/web' || mv '$NAS_DEPLOY_PATH/web' '$NAS_DEPLOY_PATH/web.previous'
+            mv '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web' '$NAS_DEPLOY_PATH/web'
+            test ! -e '$NAS_DEPLOY_PATH/wechat-admin.previous.jar' || rm -f '$NAS_DEPLOY_PATH/wechat-admin.previous.jar'
+            test ! -e '$NAS_DEPLOY_PATH/wechat-admin.jar' || mv '$NAS_DEPLOY_PATH/wechat-admin.jar' '$NAS_DEPLOY_PATH/wechat-admin.previous.jar'
+            mv '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar' '$NAS_DEPLOY_PATH/wechat-admin.jar'
+            $NAS_RESTART_COMMAND
             ready=0
             for i in \$(seq 1 30); do
-              code=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18088/wx/notify/deploy-success -X POST \
+              code=\$(curl -s -o /dev/null -w '%{http_code}' '$HEALTHCHECK_URL' -X POST \
                 -H 'Content-Type: application/json' -H 'X-Notify-Secret: x' -d '{}' || true)
               if [ \"\$code\" != '000' ] && [ -n \"\$code\" ]; then ready=1; break; fi
               sleep 2
             done
             [ \"\$ready\" -eq 1 ] || { echo 'service did not become ready in time'; exit 1; }
-            rm -rf '$DEPLOY_PATH/.deploy/$RELEASE_ID'"
+            rm -rf '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID'"
 
       # 通知走通用推送网关：请求头里的公众号推送密钥决定发到哪个公众号，
       # 地址里的通道标识决定用哪套收件人和文案（在后台「消息推送」页面配置）
@@ -208,6 +275,8 @@ jobs:
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
           STEP_DOWNLOAD_WEB: ${{ steps.download_web.outcome }}
           STEP_DOWNLOAD_API: ${{ steps.download_api.outcome }}
+          STEP_VALIDATE: ${{ steps.validate.outcome }}
+          STEP_TAILSCALE: ${{ steps.tailscale.outcome }}
           STEP_CONFIGURE_SSH: ${{ steps.configure_ssh.outcome }}
           STEP_UPLOAD: ${{ steps.upload.outcome }}
           STEP_ACTIVATE: ${{ steps.activate.outcome }}
@@ -219,8 +288,10 @@ jobs:
           step_map = {
               'STEP_DOWNLOAD_WEB':   ('下载前端构件', ''),
               'STEP_DOWNLOAD_API':   ('下载后端构件', ''),
+              'STEP_VALIDATE':       ('校验 NAS 部署配置', ''),
+              'STEP_TAILSCALE':      ('接入 Tailscale 网络', ''),
               'STEP_CONFIGURE_SSH':  ('配置部署 SSH 密钥', ''),
-              'STEP_UPLOAD':         ('上传发布文件到服务器', ''),
+              'STEP_UPLOAD':         ('上传发布文件到 NAS', ''),
               'STEP_ACTIVATE':       ('激活新版本并重启服务', ''),
           }
           failed_step = '未知步骤'

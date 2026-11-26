@@ -32,3 +32,5 @@ wechat-admin.env
 .claude
 .vscode
 portal-app
+.github/workflows/deploy.yml
+.docs
