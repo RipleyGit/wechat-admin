@@ -300,3 +300,104 @@ jobs:
           except Exception as e:
               print(f'::warning::部署通知失败：{e}')
           PYEOF
+
+  # 把每次部署的结果发布到 MQTT（主题 github/wechat-admin），方便在订阅端实时看效果。
+  # 独立跑在 GitHub 托管 runner 上，不依赖 NAS runner 的 Python 环境；
+  # build 失败时 deploy 会被跳过，这个 job 用 always() 仍然执行并上报失败原因。
+  # 凭据走 GitHub Actions secrets（MQTT_USERNAME / MQTT_PASSWORD），不要写进文件。
+  notify-mqtt:
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build, deploy]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install paho-mqtt
+        run: python3 -m pip install --quiet paho-mqtt==2.1.0
+
+      - name: Publish deploy result to MQTT
+        # 和微信通知一样：MQTT 推送失败不影响部署结论，只在 run 页面留一条 warning
+        continue-on-error: true
+        env:
+          MQTT_URL: wss://mqtt.bleem.site:443/mqtt
+          MQTT_USERNAME: ${{ secrets.MQTT_USERNAME }}
+          MQTT_PASSWORD: ${{ secrets.MQTT_PASSWORD }}
+          MQTT_TOPIC: github/wechat-admin
+          BUILD_RESULT: ${{ needs.build.result }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          ACTOR: ${{ github.actor }}
+          BRANCH: ${{ github.ref_name }}
+          PROJECT: ${{ github.event.repository.name }}
+          REPO: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 - <<'PYEOF'
+          import datetime
+          import json
+          import os
+          import sys
+          from urllib.parse import urlparse
+
+          import paho.mqtt.client as mqtt
+
+          build_result = os.environ.get('BUILD_RESULT', '')
+          deploy_result = os.environ.get('DEPLOY_RESULT', '')
+          if build_result != 'success':
+              status, failed_stage = 'failure', '构建（build）'
+          elif deploy_result == 'success':
+              status, failed_stage = 'success', ''
+          elif deploy_result == 'cancelled':
+              status, failed_stage = 'cancelled', '部署（deploy）'
+          else:
+              status, failed_stage = 'failure', '部署（deploy）'
+
+          commit_msg = (os.environ.get('COMMIT_MSG') or '').split('\n', 1)[0].strip()
+          payload = json.dumps({
+              'status': status,
+              'project': os.environ.get('PROJECT', ''),
+              'repo': os.environ.get('REPO', ''),
+              'branch': os.environ.get('BRANCH', ''),
+              'commit': (os.environ.get('COMMIT_SHA') or '')[:7],
+              'commit_msg': commit_msg,
+              'actor': os.environ.get('ACTOR', ''),
+              'run_url': os.environ.get('RUN_URL', ''),
+              'deploy_time': datetime.datetime.now(
+                  datetime.timezone(datetime.timedelta(hours=8))
+              ).strftime('%Y-%m-%d %H:%M:%S'),
+              'build_result': build_result,
+              'deploy_result': deploy_result,
+              'failed_stage': failed_stage,
+          }, ensure_ascii=False)
+
+          url = urlparse(os.environ['MQTT_URL'])
+          client = mqtt.Client(
+              mqtt.CallbackAPIVersion.VERSION2,
+              client_id='gha-wechat-admin-' + os.environ.get('GITHUB_RUN_ID', '0'),
+              transport='websockets',
+          )
+          client.ws_set_options(path=url.path or '/mqtt')
+          if url.scheme == 'wss':
+              client.tls_set()
+          client.username_pw_set(os.environ['MQTT_USERNAME'], os.environ['MQTT_PASSWORD'])
+          client.on_connect = lambda c, u, flags, rc, props: print(f'MQTT connected: {rc}')
+
+          try:
+              client.connect(url.hostname, url.port or (443 if url.scheme == 'wss' else 80), keepalive=30)
+              client.loop_start()
+              # QoS1 + retain：等 broker 的 puback 再退出；retain 让订阅端一连上就能看到最近一次结果
+              info = client.publish(os.environ['MQTT_TOPIC'], payload, qos=1, retain=True)
+              info.wait_for_publish(timeout=15)
+              print(f"MQTT 已发送到 {os.environ['MQTT_TOPIC']}: {payload}")
+          except Exception as e:
+              print(f'::warning::MQTT 推送失败：{e}')
+              sys.exit(1)
+          finally:
+              client.disconnect()
+              client.loop_stop()
+          PYEOF
