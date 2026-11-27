@@ -33,6 +33,8 @@
 		<!-- 不要升 9.x：9.x 依赖 okhttp 5.x，其主 jar 是 KMP 元数据空壳且 POM 未声明 okhttp-jvm，
 		     Maven 解析后 classpath 上没有实现类，运行时必然 NoClassDefFoundError。详见 docs/fan-messaging.md -->
 		<minio.version>8.5.2</minio.version>
+		<!-- Nacos 配置中心客户端，0.2.12 是 Boot 2.x 线，JDK 8 可用；不要升到 Nacos 3.x 相关版本 -->
+		<nacos.config.version>0.2.12</nacos.config.version>
 	</properties>
 
 	<dependencies>
@@ -58,6 +60,12 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-validation</artifactId>
+		</dependency>
+		<!-- Nacos 配置中心。只做配置拉取，不引 Spring Cloud / 服务发现 -->
+		<dependency>
+			<groupId>com.alibaba.boot</groupId>
+			<artifactId>nacos-config-spring-boot-starter</artifactId>
+			<version>${nacos.config.version}</version>
 		</dependency>
 		<dependency>
 			<groupId>com.github.binarywang</groupId>

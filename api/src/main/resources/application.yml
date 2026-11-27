@@ -41,6 +41,26 @@ spring:
         max-wait: 500
         time-between-eviction-runs: 6000
 
+# Nacos 配置中心（nacos-config-spring-boot-starter，不引 Spring Cloud）
+# 详细说明见 .docs/nacos-config.md。data-id 固定 wechat-admin.yml，public 命名空间、DEFAULT_GROUP。
+# remote-first 默认 false：Nacos 里的键不覆盖本地 application*.yml，只做增量开关；
+# 要让远端覆盖（含热更新）再置 true。账号密码只从环境变量注入，不写进仓库。
+nacos:
+  config:
+    enabled: ${NACOS_CONFIG_ENABLED:true}
+    server-addr: ${NACOS_ADDR:dsm.bleem.site:8848}
+    namespace: ${NACOS_NAMESPACE:}
+    group: ${NACOS_GROUP:DEFAULT_GROUP}
+    username: ${NACOS_USERNAME:}
+    password: ${NACOS_PASSWORD:}
+    data-id: wechat-admin.yml
+    type: yaml
+    auto-refresh: ${NACOS_AUTO_REFRESH:true}
+    remote-first: ${NACOS_REMOTE_FIRST:false}
+    bootstrap:
+      # 与 enabled 同一个开关：NACOS_CONFIG_ENABLED=false 时彻底关闭拉取
+      enable: ${NACOS_CONFIG_ENABLED:true}
+
 
 #mybatis
 mybatis-plus:
