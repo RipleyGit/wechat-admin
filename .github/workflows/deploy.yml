@@ -14,76 +14,33 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    runs-on: ubuntu-24.04
+  build-and-deploy:
+    # 构建和部署合成一个 job，跑在 NAS 自托管 runner 上（定制镜像预装
+    # Node 20 + Temurin Java 8 + Maven）：checkout、构建、拷贝、重启全在
+    # 同一个工作目录里完成，不再经过 GitHub artifact 存储，70MB 的 jar
+    # 不用再传来传去。PR 触发时只跑构建，部署步骤只在 push 到 main 时执行。
+    runs-on: [self-hosted, nas]
+    environment: production
+    # 超时从 job 开始执行才计时，排队等待不算；构建（首次要下载 npm/Maven 依赖）
+    # 加部署一共 30 分钟
+    timeout-minutes: 30
     steps:
       - name: Check out source
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-
       - name: Build web console
+        id: build_web
         working-directory: web
         run: |
           npm ci
           npm run build
 
-      - name: Set up Java 8
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "8"
-          cache: maven
-
       - name: Build API JAR
+        id: build_api
         working-directory: api
         run: mvn -q -DskipTests package
 
-      - name: Upload web artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: web-dist
-          path: web/dist
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload API artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: api-jar
-          path: api/target/wx-api.jar
-          if-no-files-found: error
-          retention-days: 7
-
-  deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: build
-    # 自托管 runner 就在 NAS 本机上：构建仍在 GitHub 托管 runner 上做，
-    # deploy 只做下载构件 + 本地拷贝 + 本地重启，不再走 Tailscale/DERP/SSH
-    runs-on: [self-hosted, nas]
-    environment: production
-    # runner 不在线时任务会排队等，15 分钟没跑起来就失败，不无限挂着
-    timeout-minutes: 15
-    steps:
-      - name: Download web artifact
-        id: download_web
-        uses: actions/download-artifact@v4
-        with:
-          name: web-dist
-          path: release/web
-
-      - name: Download API artifact
-        id: download_api
-        uses: actions/download-artifact@v4
-        with:
-          name: api-jar
-          path: release/api
-
+      # 部署步骤只在 push 到 main 时执行；PR 触发时只跑上面的构建
       # 迁移到 NAS 后，原来指向云服务器的 DEPLOY_HOST/DEPLOY_USER/DEPLOY_PATH/DEPLOY_PORT
       # 已全部改为 NAS_ 前缀；缺任何一个 NAS_* secret 都尽早失败，避免继续部署到旧地址
       # NAS_DEPLOY_PATH / NAS_RESTART_COMMAND 仍走 secrets（只是路径和命令，
@@ -91,6 +48,7 @@ jobs:
       # 且路径和这里的 NAS_DEPLOY_PATH 完全一致
       - name: Validate NAS deploy configuration
         id: validate
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           NAS_DEPLOY_PATH: ${{ secrets.NAS_DEPLOY_PATH }}
           NAS_RESTART_COMMAND: ${{ secrets.NAS_RESTART_COMMAND }}
@@ -106,19 +64,20 @@ jobs:
 
       - name: Upload release files
         id: upload
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           NAS_DEPLOY_PATH: ${{ secrets.NAS_DEPLOY_PATH }}
           RELEASE_ID: ${{ github.sha }}
         run: |
-          # 自托管 runner 就在 NAS 上：构件从 GitHub 直下到 runner 工作目录，
-          # 再本地 cp 到部署目录，不再走 Tailscale/SSH，也不再需要分块、重试和超时
+          # 构建和部署在同一个 job 里：直接把本地构建结果 cp 到部署目录，
+          # 不经过 GitHub artifact 存储
           set -e
           rm -rf "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID"
           mkdir -p "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api" "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web"
-          echo "== 拷贝 web（$(du -sh release/web | cut -f1)）=="
-          cp -r release/web/. "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web/"
-          echo "== 拷贝 api jar（$(du -sh release/api/wx-api.jar | cut -f1)）=="
-          cp release/api/wx-api.jar "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar"
+          echo "== 拷贝 web（$(du -sh web/dist | cut -f1)）=="
+          cp -r web/dist/. "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web/"
+          echo "== 拷贝 api jar（$(du -sh api/target/wx-api.jar | cut -f1)）=="
+          cp api/target/wx-api.jar "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar"
           test -s "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar"
           test -f "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web/index.html"
           echo "拷贝完成"
@@ -134,6 +93,7 @@ jobs:
       # 想验证公网链路可把 NAS_HEALTHCHECK_URL 改成公网地址，但必须先确认域名已切到 NAS。
       - name: Activate release
         id: activate
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           NAS_DEPLOY_PATH: ${{ secrets.NAS_DEPLOY_PATH }}
           NAS_RESTART_COMMAND: ${{ secrets.NAS_RESTART_COMMAND }}
@@ -170,7 +130,7 @@ jobs:
       # 通知走通用推送网关：请求头里的公众号推送密钥决定发到哪个公众号，
       # 地址里的通道标识决定用哪套收件人和文案（在后台「消息推送」页面配置）
       - name: Notify success via WeChat
-        if: success()
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         continue-on-error: true
         env:
           NOTIFY_SECRET: ${{ secrets.NOTIFY_SECRET }}
@@ -225,7 +185,7 @@ jobs:
           PYEOF
 
       - name: Notify failure via WeChat
-        if: failure() || cancelled()
+        if: (failure() || cancelled()) && github.event_name == 'push' && github.ref == 'refs/heads/main'
         continue-on-error: true
         env:
           NOTIFY_SECRET: ${{ secrets.NOTIFY_SECRET }}
@@ -234,11 +194,9 @@ jobs:
           BRANCH: ${{ github.ref_name }}
           PROJECT: ${{ github.event.repository.name }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          STEP_DOWNLOAD_WEB: ${{ steps.download_web.outcome }}
-          STEP_DOWNLOAD_API: ${{ steps.download_api.outcome }}
+          STEP_BUILD_WEB: ${{ steps.build_web.outcome }}
+          STEP_BUILD_API: ${{ steps.build_api.outcome }}
           STEP_VALIDATE: ${{ steps.validate.outcome }}
-          STEP_TAILSCALE: ${{ steps.tailscale.outcome }}
-          STEP_CONFIGURE_SSH: ${{ steps.configure_ssh.outcome }}
           STEP_UPLOAD: ${{ steps.upload.outcome }}
           STEP_ACTIVATE: ${{ steps.activate.outcome }}
         run: |
@@ -247,13 +205,11 @@ jobs:
           deploy_time = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
           commit_msg = (os.environ.get('COMMIT_MSG') or '').split('\n', 1)[0].strip()
           step_map = {
-              'STEP_DOWNLOAD_WEB':   ('下载前端构件', ''),
-              'STEP_DOWNLOAD_API':   ('下载后端构件', ''),
-              'STEP_VALIDATE':       ('校验 NAS 部署配置', ''),
-              'STEP_TAILSCALE':      ('接入 Tailscale 网络', ''),
-              'STEP_CONFIGURE_SSH':  ('配置部署 SSH 密钥', ''),
-              'STEP_UPLOAD':         ('上传发布文件到 NAS', ''),
-              'STEP_ACTIVATE':       ('激活新版本并重启服务', ''),
+              'STEP_BUILD_WEB':  ('构建前端', ''),
+              'STEP_BUILD_API':  ('构建后端', ''),
+              'STEP_VALIDATE':   ('校验 NAS 部署配置', ''),
+              'STEP_UPLOAD':     ('上传发布文件到 NAS', ''),
+              'STEP_ACTIVATE':   ('激活新版本并重启服务', ''),
           }
           failed_step = '未知步骤'
           for env_key, (name, err_detail) in step_map.items():
@@ -303,11 +259,11 @@ jobs:
 
   # 把每次部署的结果以纯文本发布到 MQTT（主题 github/wechat-admin），格式与微信部署通知一致。
   # 独立跑在 GitHub 托管 runner 上，不依赖 NAS runner 的 Python 环境；
-  # build 失败时 deploy 会被跳过，这个 job 用 always() 仍然执行并上报失败原因。
+  # 构建部署合成一个 job 后，这里只依赖它一个结果，用 always() 保证即使它失败或被取消也上报。
   # 凭据走 GitHub Actions secrets（MQTT_USERNAME / MQTT_PASSWORD），不要写进文件。
   notify-mqtt:
     if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [build, deploy]
+    needs: [build-and-deploy]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -327,8 +283,7 @@ jobs:
           MQTT_USERNAME: ${{ secrets.MQTT_USERNAME }}
           MQTT_PASSWORD: ${{ secrets.MQTT_PASSWORD }}
           MQTT_TOPIC: github/wechat-admin
-          BUILD_RESULT: ${{ needs.build.result }}
-          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          JOB_RESULT: ${{ needs.build-and-deploy.result }}
           COMMIT_MSG: ${{ github.event.head_commit.message }}
           ACTOR: ${{ github.actor }}
           BRANCH: ${{ github.ref_name }}
@@ -343,16 +298,13 @@ jobs:
 
           import paho.mqtt.client as mqtt
 
-          build_result = os.environ.get('BUILD_RESULT', '')
-          deploy_result = os.environ.get('DEPLOY_RESULT', '')
-          if build_result != 'success':
-              status, failed_stage = 'failure', '构建（build）'
-          elif deploy_result == 'success':
+          job_result = os.environ.get('JOB_RESULT', '')
+          if job_result == 'success':
               status, failed_stage = 'success', ''
-          elif deploy_result == 'cancelled':
-              status, failed_stage = 'cancelled', '部署（deploy）'
+          elif job_result == 'cancelled':
+              status, failed_stage = 'cancelled', '构建部署'
           else:
-              status, failed_stage = 'failure', '部署（deploy）'
+              status, failed_stage = 'failure', '构建部署'
 
           commit_msg = (os.environ.get('COMMIT_MSG') or '').split('\n', 1)[0].strip()
           # 纯文本没有 thing 字段那 20 字的限制，比微信模板版多留一个字
