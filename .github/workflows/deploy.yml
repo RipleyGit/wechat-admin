@@ -301,7 +301,7 @@ jobs:
               print(f'::warning::部署通知失败：{e}')
           PYEOF
 
-  # 把每次部署的结果发布到 MQTT（主题 github/wechat-admin），方便在订阅端实时看效果。
+  # 把每次部署的结果以纯文本发布到 MQTT（主题 github/wechat-admin），格式与微信部署通知一致。
   # 独立跑在 GitHub 托管 runner 上，不依赖 NAS runner 的 Python 环境；
   # build 失败时 deploy 会被跳过，这个 job 用 always() 仍然执行并上报失败原因。
   # 凭据走 GitHub Actions secrets（MQTT_USERNAME / MQTT_PASSWORD），不要写进文件。
@@ -333,13 +333,10 @@ jobs:
           ACTOR: ${{ github.actor }}
           BRANCH: ${{ github.ref_name }}
           PROJECT: ${{ github.event.repository.name }}
-          REPO: ${{ github.repository }}
-          COMMIT_SHA: ${{ github.sha }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python3 - <<'PYEOF'
           import datetime
-          import json
           import os
           import sys
           from urllib.parse import urlparse
@@ -358,22 +355,33 @@ jobs:
               status, failed_stage = 'failure', '部署（deploy）'
 
           commit_msg = (os.environ.get('COMMIT_MSG') or '').split('\n', 1)[0].strip()
-          payload = json.dumps({
-              'status': status,
-              'project': os.environ.get('PROJECT', ''),
-              'repo': os.environ.get('REPO', ''),
-              'branch': os.environ.get('BRANCH', ''),
-              'commit': (os.environ.get('COMMIT_SHA') or '')[:7],
-              'commit_msg': commit_msg,
-              'actor': os.environ.get('ACTOR', ''),
-              'run_url': os.environ.get('RUN_URL', ''),
-              'deploy_time': datetime.datetime.now(
-                  datetime.timezone(datetime.timedelta(hours=8))
-              ).strftime('%Y-%m-%d %H:%M:%S'),
-              'build_result': build_result,
-              'deploy_result': deploy_result,
-              'failed_stage': failed_stage,
-          }, ensure_ascii=False)
+          # 纯文本没有 thing 字段那 20 字的限制，比微信模板版多留一个字
+          commit_short = commit_msg[:20] + '…' if len(commit_msg) > 21 else commit_msg
+          deploy_time = datetime.datetime.now(
+              datetime.timezone(datetime.timedelta(hours=8))
+          ).strftime('%Y-%m-%d %H:%M:%S')
+
+          # 推纯文本而不是 JSON：内容和微信部署通知一致，订阅端直接可读
+          if status == 'success':
+              title = f'✅ {commit_short} 部署成功'
+          elif status == 'cancelled':
+              title = f'⚠️ {commit_short} 部署取消'
+          else:
+              title = f'❌ {commit_short} 部署失败'
+          lines = [
+              title,
+              f"项目：{os.environ.get('PROJECT', '')}",
+              f"分支：{os.environ.get('BRANCH', '')}",
+              f"提交：{commit_msg}",
+              f"作者：{os.environ.get('ACTOR', '')}",
+              f"时间：{deploy_time}",
+          ]
+          if failed_stage:
+              stage_label = '中断阶段' if status == 'cancelled' else '失败步骤'
+              lines.append(f'{stage_label}：{failed_stage}')
+          if status != 'success':
+              lines.append(f"日志：{os.environ.get('RUN_URL', '')}")
+          content = '\n'.join(lines)
 
           url = urlparse(os.environ['MQTT_URL'])
           client = mqtt.Client(
@@ -391,9 +399,9 @@ jobs:
               client.connect(url.hostname, url.port or (443 if url.scheme == 'wss' else 80), keepalive=30)
               client.loop_start()
               # QoS1 + retain：等 broker 的 puback 再退出；retain 让订阅端一连上就能看到最近一次结果
-              info = client.publish(os.environ['MQTT_TOPIC'], payload, qos=1, retain=True)
+              info = client.publish(os.environ['MQTT_TOPIC'], content, qos=1, retain=True)
               info.wait_for_publish(timeout=15)
-              print(f"MQTT 已发送到 {os.environ['MQTT_TOPIC']}: {payload}")
+              print(f"MQTT 已发送到 {os.environ['MQTT_TOPIC']}:\n{content}")
           except Exception as e:
               print(f'::warning::MQTT 推送失败：{e}')
               sys.exit(1)
