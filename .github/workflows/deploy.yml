@@ -14,73 +14,180 @@ permissions:
   contents: read
 
 jobs:
-  build-and-deploy:
-    # 构建和部署合成一个 job，跑在 NAS 自托管 runner 上（定制镜像预装
-    # Node 20 + Temurin Java 8 + Maven）：checkout、构建、拷贝、重启全在
-    # 同一个工作目录里完成，不再经过 GitHub artifact 存储，70MB 的 jar
-    # 不用再传来传去。PR 触发时只跑构建，部署步骤只在 push 到 main 时执行。
-    runs-on: [self-hosted, nas]
-    environment: production
-    # 超时从 job 开始执行才计时，排队等待不算；构建（首次要下载 npm/Maven 依赖）
-    # 加部署一共 30 分钟
-    timeout-minutes: 30
+  build:
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
       - name: Build web console
-        id: build_web
         working-directory: web
         run: |
           npm ci
           npm run build
 
+      - name: Set up Java 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "8"
+          cache: maven
+
       - name: Build API JAR
-        id: build_api
         working-directory: api
         run: mvn -q -DskipTests package
 
-      # 部署步骤只在 push 到 main 时执行；PR 触发时只跑上面的构建
-      # 迁移到 NAS 后，原来指向云服务器的 DEPLOY_HOST/DEPLOY_USER/DEPLOY_PATH/DEPLOY_PORT
-      # 已全部改为 NAS_ 前缀；缺任何一个 NAS_* secret 都尽早失败，避免继续部署到旧地址
-      # NAS_DEPLOY_PATH / NAS_RESTART_COMMAND 仍走 secrets（只是路径和命令，
-      # 不再含 SSH/Tailscale 凭据）；部署目录必须已挂载进 runner 容器，
-      # 且路径和这里的 NAS_DEPLOY_PATH 完全一致
+      - name: Upload web artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload API artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-jar
+          path: api/target/wx-api.jar
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    environment: production
+    # 经跳板机（阿里云 VPS）+ ZeroTier 到 NAS：runner 到跳板机是公网 SSH，
+    # 跳板机到 NAS 走 ZeroTier 内网；70MB 的 jar 经两段转发，不再走 Tailscale DERP
+    timeout-minutes: 30
+    steps:
+      - name: Download web artifact
+        id: download_web
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: release/web
+
+      - name: Download API artifact
+        id: download_api
+        uses: actions/download-artifact@v4
+        with:
+          name: api-jar
+          path: release/api
+
+      # 部署经跳板机走：runner -> 阿里云 VPS（跳板机，公网 SSH）-> ZeroTier -> NAS。
+      # 缺任何一个 secret 都尽早失败，避免连到旧地址。
+      # DEPLOY_SSH_KEY 是专用部署私钥的完整内容（含 BEGIN/END 行），同一把密钥
+      # 同时用于两段认证，对应公钥要分别装进 VPS 上 root 和 NAS 上 ripley-nas 的
+      # ~/.ssh/authorized_keys。
       - name: Validate NAS deploy configuration
         id: validate
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
+          JUMP_HOST: ${{ secrets.JUMP_HOST }}
+          JUMP_PORT: ${{ secrets.JUMP_PORT }}
+          JUMP_USER: ${{ secrets.JUMP_USER }}
+          NAS_HOST: ${{ secrets.NAS_HOST }}
+          NAS_PORT: ${{ secrets.NAS_PORT }}
+          NAS_USER: ${{ secrets.NAS_USER }}
           NAS_DEPLOY_PATH: ${{ secrets.NAS_DEPLOY_PATH }}
           NAS_RESTART_COMMAND: ${{ secrets.NAS_RESTART_COMMAND }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
         run: |
           missing=''
+          [ -n "$JUMP_HOST" ] || missing="$missing JUMP_HOST"
+          [ -n "$JUMP_PORT" ] || missing="$missing JUMP_PORT"
+          [ -n "$JUMP_USER" ] || missing="$missing JUMP_USER"
+          [ -n "$NAS_HOST" ] || missing="$missing NAS_HOST"
+          [ -n "$NAS_PORT" ] || missing="$missing NAS_PORT"
+          [ -n "$NAS_USER" ] || missing="$missing NAS_USER"
           [ -n "$NAS_DEPLOY_PATH" ] || missing="$missing NAS_DEPLOY_PATH"
           [ -n "$NAS_RESTART_COMMAND" ] || missing="$missing NAS_RESTART_COMMAND"
+          [ -n "$DEPLOY_SSH_KEY" ] || missing="$missing DEPLOY_SSH_KEY"
           if [ -n "$missing" ]; then
-            echo "::error::缺少必要的 NAS 部署配置:$missing"
+            echo "::error::缺少必要的部署 Secrets:$missing"
             exit 1
           fi
-          [ -d "$NAS_DEPLOY_PATH" ] || { echo "::error::部署目录不存在: $NAS_DEPLOY_PATH（检查 runner 容器的挂载路径是否和这个一致）"; exit 1; }
+
+      # 沿用密钥认证。跳板机的主机密钥用 ssh-keyscan 预先写入 known_hosts；
+      # NAS 的主机密钥用 StrictHostKeyChecking=accept-new 在首次连接时记录
+      #（密钥变了会拒绝，只接受首次见到）。
+      - name: Configure deployment SSH key
+        id: configure_ssh
+        env:
+          JUMP_HOST: ${{ secrets.JUMP_HOST }}
+          JUMP_PORT: ${{ secrets.JUMP_PORT }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "${JUMP_PORT:-2232}" "$JUMP_HOST" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
 
       - name: Upload release files
         id: upload
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
+          JUMP_HOST: ${{ secrets.JUMP_HOST }}
+          JUMP_PORT: ${{ secrets.JUMP_PORT }}
+          JUMP_USER: ${{ secrets.JUMP_USER }}
+          NAS_HOST: ${{ secrets.NAS_HOST }}
+          NAS_PORT: ${{ secrets.NAS_PORT }}
+          NAS_USER: ${{ secrets.NAS_USER }}
           NAS_DEPLOY_PATH: ${{ secrets.NAS_DEPLOY_PATH }}
           RELEASE_ID: ${{ github.sha }}
         run: |
-          # 构建和部署在同一个 job 里：直接把本地构建结果 cp 到部署目录，
-          # 不经过 GitHub artifact 存储
-          set -e
-          rm -rf "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID"
-          mkdir -p "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api" "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web"
-          echo "== 拷贝 web（$(du -sh web/dist | cut -f1)）=="
-          cp -r web/dist/. "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web/"
-          echo "== 拷贝 api jar（$(du -sh api/target/wx-api.jar | cut -f1)）=="
-          cp api/target/wx-api.jar "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar"
-          test -s "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar"
-          test -f "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web/index.html"
-          echo "拷贝完成"
+          # 经跳板机（阿里云 VPS）到 NAS：runner 先 SSH 到跳板机，再经 ZeroTier 到 NAS。
+          # 跳板机只做 TCP 转发，数据不落盘。同一把部署密钥同时用于两段认证
+          #（ProxyJump 下本地 ssh 客户端直接和跳板机、NAS 两端做认证）。
+          # BatchMode 禁止任何交互式提示；ServerAlive 让链路真死时快速失败。
+          SSH_OPTS="-i $HOME/.ssh/id_ed25519 -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=accept-new"
+          JUMP="$JUMP_USER@$JUMP_HOST:${JUMP_PORT:-2232}"
+          NAS_PORT="${NAS_PORT:-22}"
+          TARGET="$NAS_USER@$NAS_HOST"
+
+          echo '== 预检：经跳板机连通 NAS =='
+          ssh $SSH_OPTS -J "$JUMP" -p "$NAS_PORT" "$TARGET" true || {
+            echo '::error::经跳板机连不上 NAS：检查跳板机到 NAS 的 ZeroTier、NAS 上 ripley-nas 的 authorized_keys、以及部署密钥'
+            exit 1
+          }
+
+          ssh $SSH_OPTS -J "$JUMP" -p "$NAS_PORT" "$TARGET" \
+            "mkdir -p '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api' '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web'"
+
+          # rsync 走同一条跳板通道；--partial 让中断后可断点续传，每步最多重试 3 次
+          for attempt in 1 2 3; do
+            if rsync -az --partial --timeout=120 -e "ssh $SSH_OPTS -J $JUMP -p $NAS_PORT" \
+              release/web/ "$TARGET:$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web/"; then
+              break
+            fi
+            echo "web 上传第 $attempt 次失败，重试"
+            [ "$attempt" -lt 3 ] || { echo '::error::web 上传失败：3 次均未成功'; exit 1; }
+            sleep 5
+          done
+          for attempt in 1 2 3; do
+            if rsync -az --partial --timeout=120 -e "ssh $SSH_OPTS -J $JUMP -p $NAS_PORT" \
+              release/api/wx-api.jar "$TARGET:$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar"; then
+              break
+            fi
+            echo "api jar 上传第 $attempt 次失败，重试"
+            [ "$attempt" -lt 3 ] || { echo '::error::api jar 上传失败：3 次均未成功'; exit 1; }
+            sleep 5
+          done
+
+          # 校验远端文件完整（jar 字节数一致，web 有 index.html）
+          local_size=$(wc -c < release/api/wx-api.jar | tr -d ' ')
+          ssh $SSH_OPTS -J "$JUMP" -p "$NAS_PORT" "$TARGET" \
+            "test -s '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar' && test -f '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web/index.html' && test \"\$(wc -c < '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar' | tr -d ' ')\" = '$local_size'" \
+            || { echo '::error::远端文件校验失败：jar 大小不一致或文件缺失'; exit 1; }
+          echo "上传完成（web + api jar $local_size 字节）"
 
       # DSM 没有 systemd，原来的 systemctl restart / is-active 已移除。
       # 重启与服务状态检查统一交给 NAS_RESTART_COMMAND（在 NAS 上执行，失败必须返回非 0），例如：
@@ -93,8 +200,13 @@ jobs:
       # 想验证公网链路可把 NAS_HEALTHCHECK_URL 改成公网地址，但必须先确认域名已切到 NAS。
       - name: Activate release
         id: activate
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
+          JUMP_HOST: ${{ secrets.JUMP_HOST }}
+          JUMP_PORT: ${{ secrets.JUMP_PORT }}
+          JUMP_USER: ${{ secrets.JUMP_USER }}
+          NAS_HOST: ${{ secrets.NAS_HOST }}
+          NAS_PORT: ${{ secrets.NAS_PORT }}
+          NAS_USER: ${{ secrets.NAS_USER }}
           NAS_DEPLOY_PATH: ${{ secrets.NAS_DEPLOY_PATH }}
           NAS_RESTART_COMMAND: ${{ secrets.NAS_RESTART_COMMAND }}
           NAS_HEALTHCHECK_URL: ${{ secrets.NAS_HEALTHCHECK_URL }}
@@ -104,33 +216,35 @@ jobs:
             echo '::error::NAS_RESTART_COMMAND secret 未配置：DSM 没有 systemd，必须指定服务重启命令'
             exit 1
           fi
-          # 注意：runner 跑在容器里，这里的 127.0.0.1 是容器自己，不是 NAS 本机；
-          # 健康检查默认打 NAS 的 Tailscale IP
-          HEALTHCHECK_URL="${NAS_HEALTHCHECK_URL:-http://100.97.151.65:18088/wx/notify/deploy-success}"
-          set -eu
-          test -s "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar"
-          test -f "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web/index.html"
-          rm -rf "$NAS_DEPLOY_PATH/web.previous"
-          test ! -e "$NAS_DEPLOY_PATH/web" || mv "$NAS_DEPLOY_PATH/web" "$NAS_DEPLOY_PATH/web.previous"
-          mv "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web" "$NAS_DEPLOY_PATH/web"
-          test ! -e "$NAS_DEPLOY_PATH/wechat-admin.previous.jar" || rm -f "$NAS_DEPLOY_PATH/wechat-admin.previous.jar"
-          test ! -e "$NAS_DEPLOY_PATH/wechat-admin.jar" || mv "$NAS_DEPLOY_PATH/wechat-admin.jar" "$NAS_DEPLOY_PATH/wechat-admin.previous.jar"
-          mv "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar" "$NAS_DEPLOY_PATH/wechat-admin.jar"
-          $NAS_RESTART_COMMAND
-          ready=0
-          for i in $(seq 1 30); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' "$HEALTHCHECK_URL" -X POST \
-              -H 'Content-Type: application/json' -H 'X-Notify-Secret: x' -d '{}' || true)
-            if [ "$code" != '000' ] && [ -n "$code" ]; then ready=1; break; fi
-            sleep 2
-          done
-          [ "$ready" -eq 1 ] || { echo 'service did not become ready in time'; exit 1; }
-          rm -rf "$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID"
+          SSH_OPTS="-i $HOME/.ssh/id_ed25519 -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=accept-new"
+          JUMP="$JUMP_USER@$JUMP_HOST:${JUMP_PORT:-2232}"
+          NAS_PORT="${NAS_PORT:-22}"
+          HEALTHCHECK_URL="${NAS_HEALTHCHECK_URL:-http://127.0.0.1:18088/wx/notify/deploy-success}"
+          ssh $SSH_OPTS -J "$JUMP" -p "$NAS_PORT" "$NAS_USER@$NAS_HOST" \
+            "set -eu
+            test -s '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar'
+            test -f '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web/index.html'
+            rm -rf '$NAS_DEPLOY_PATH/web.previous'
+            test ! -e '$NAS_DEPLOY_PATH/web' || mv '$NAS_DEPLOY_PATH/web' '$NAS_DEPLOY_PATH/web.previous'
+            mv '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web' '$NAS_DEPLOY_PATH/web'
+            test ! -e '$NAS_DEPLOY_PATH/wechat-admin.previous.jar' || rm -f '$NAS_DEPLOY_PATH/wechat-admin.previous.jar'
+            test ! -e '$NAS_DEPLOY_PATH/wechat-admin.jar' || mv '$NAS_DEPLOY_PATH/wechat-admin.jar' '$NAS_DEPLOY_PATH/wechat-admin.previous.jar'
+            mv '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar' '$NAS_DEPLOY_PATH/wechat-admin.jar'
+            $NAS_RESTART_COMMAND
+            ready=0
+            for i in \$(seq 1 30); do
+              code=\$(curl -s -o /dev/null -w '%{http_code}' '$HEALTHCHECK_URL' -X POST \
+                -H 'Content-Type: application/json' -H 'X-Notify-Secret: x' -d '{}' || true)
+              if [ \"\$code\" != '000' ] && [ -n \"\$code\" ]; then ready=1; break; fi
+              sleep 2
+            done
+            [ \"\$ready\" -eq 1 ] || { echo 'service did not become ready in time'; exit 1; }
+            rm -rf '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID'"
 
       # 通知走通用推送网关：请求头里的公众号推送密钥决定发到哪个公众号，
       # 地址里的通道标识决定用哪套收件人和文案（在后台「消息推送」页面配置）
       - name: Notify success via WeChat
-        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: success()
         continue-on-error: true
         env:
           NOTIFY_SECRET: ${{ secrets.NOTIFY_SECRET }}
@@ -185,7 +299,7 @@ jobs:
           PYEOF
 
       - name: Notify failure via WeChat
-        if: (failure() || cancelled()) && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: failure() || cancelled()
         continue-on-error: true
         env:
           NOTIFY_SECRET: ${{ secrets.NOTIFY_SECRET }}
@@ -194,9 +308,10 @@ jobs:
           BRANCH: ${{ github.ref_name }}
           PROJECT: ${{ github.event.repository.name }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          STEP_BUILD_WEB: ${{ steps.build_web.outcome }}
-          STEP_BUILD_API: ${{ steps.build_api.outcome }}
+          STEP_DOWNLOAD_WEB: ${{ steps.download_web.outcome }}
+          STEP_DOWNLOAD_API: ${{ steps.download_api.outcome }}
           STEP_VALIDATE: ${{ steps.validate.outcome }}
+          STEP_CONFIGURE_SSH: ${{ steps.configure_ssh.outcome }}
           STEP_UPLOAD: ${{ steps.upload.outcome }}
           STEP_ACTIVATE: ${{ steps.activate.outcome }}
         run: |
@@ -205,11 +320,12 @@ jobs:
           deploy_time = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
           commit_msg = (os.environ.get('COMMIT_MSG') or '').split('\n', 1)[0].strip()
           step_map = {
-              'STEP_BUILD_WEB':  ('构建前端', ''),
-              'STEP_BUILD_API':  ('构建后端', ''),
-              'STEP_VALIDATE':   ('校验 NAS 部署配置', ''),
-              'STEP_UPLOAD':     ('上传发布文件到 NAS', ''),
-              'STEP_ACTIVATE':   ('激活新版本并重启服务', ''),
+              'STEP_DOWNLOAD_WEB':   ('下载前端构件', ''),
+              'STEP_DOWNLOAD_API':   ('下载后端构件', ''),
+              'STEP_VALIDATE':       ('校验部署配置', ''),
+              'STEP_CONFIGURE_SSH':  ('配置部署 SSH 密钥', ''),
+              'STEP_UPLOAD':         ('上传发布文件到 NAS', ''),
+              'STEP_ACTIVATE':       ('激活新版本并重启服务', ''),
           }
           failed_step = '未知步骤'
           for env_key, (name, err_detail) in step_map.items():
@@ -259,11 +375,11 @@ jobs:
 
   # 把每次部署的结果以纯文本发布到 MQTT（主题 github/wechat-admin），格式与微信部署通知一致。
   # 独立跑在 GitHub 托管 runner 上，不依赖 NAS runner 的 Python 环境；
-  # 构建部署合成一个 job 后，这里只依赖它一个结果，用 always() 保证即使它失败或被取消也上报。
+  # build 失败时 deploy 会被跳过，这个 job 用 always() 仍然执行并上报失败原因。
   # 凭据走 GitHub Actions secrets（MQTT_USERNAME / MQTT_PASSWORD），不要写进文件。
   notify-mqtt:
     if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [build-and-deploy]
+    needs: [build, deploy]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -283,7 +399,8 @@ jobs:
           MQTT_USERNAME: ${{ secrets.MQTT_USERNAME }}
           MQTT_PASSWORD: ${{ secrets.MQTT_PASSWORD }}
           MQTT_TOPIC: github/wechat-admin
-          JOB_RESULT: ${{ needs.build-and-deploy.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
           COMMIT_MSG: ${{ github.event.head_commit.message }}
           ACTOR: ${{ github.actor }}
           BRANCH: ${{ github.ref_name }}
@@ -298,13 +415,16 @@ jobs:
 
           import paho.mqtt.client as mqtt
 
-          job_result = os.environ.get('JOB_RESULT', '')
-          if job_result == 'success':
+          build_result = os.environ.get('BUILD_RESULT', '')
+          deploy_result = os.environ.get('DEPLOY_RESULT', '')
+          if build_result != 'success':
+              status, failed_stage = 'failure', '构建（build）'
+          elif deploy_result == 'success':
               status, failed_stage = 'success', ''
-          elif job_result == 'cancelled':
-              status, failed_stage = 'cancelled', '构建部署'
+          elif deploy_result == 'cancelled':
+              status, failed_stage = 'cancelled', '部署（deploy）'
           else:
-              status, failed_stage = 'failure', '构建部署'
+              status, failed_stage = 'failure', '部署（deploy）'
 
           commit_msg = (os.environ.get('COMMIT_MSG') or '').split('\n', 1)[0].strip()
           # 纯文本没有 thing 字段那 20 字的限制，比微信模板版多留一个字
