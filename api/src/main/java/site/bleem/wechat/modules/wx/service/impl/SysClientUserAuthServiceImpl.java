@@ -2,9 +2,11 @@ package site.bleem.wechat.modules.wx.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -13,17 +15,25 @@ import site.bleem.wechat.common.utils.PageUtils;
 import site.bleem.wechat.common.utils.Query;
 import site.bleem.wechat.modules.wx.dao.SysClientUserAuthMapper;
 import site.bleem.wechat.modules.wx.entity.SysClientUserAuth;
+import site.bleem.wechat.modules.wx.entity.WxUser;
 import site.bleem.wechat.modules.wx.service.SysClientUserAuthService;
+import site.bleem.wechat.modules.wx.service.WxUserService;
 
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @Service
 public class SysClientUserAuthServiceImpl extends ServiceImpl<SysClientUserAuthMapper, SysClientUserAuth>
         implements SysClientUserAuthService {
 
     private static final Logger logger = LoggerFactory.getLogger(SysClientUserAuthServiceImpl.class);
+
+    @Autowired
+    private WxUserService wxUserService;
 
     @Override
     public PageUtils queryPage(Map<String, Object> params) {
@@ -39,7 +49,76 @@ public class SysClientUserAuthServiceImpl extends ServiceImpl<SysClientUserAuthM
             wrapper.eq("status", Integer.valueOf(String.valueOf(statusParam)));
         }
 
-        return new PageUtils(this.page(new Query<SysClientUserAuth>().getPage(params, "id", false), wrapper));
+        IPage<SysClientUserAuth> page = this.page(new Query<SysClientUserAuth>().getPage(params, "id", false), wrapper);
+        PageUtils result = new PageUtils(page);
+        // 每行附带用户昵称、手机号：收集当页 user_id 一次性查 wx_user，避免 N+1
+        result.setList(attachUserInfo(page.getRecords()));
+        return result;
+    }
+
+    /**
+     * 给授权记录拼上用户昵称、手机号。
+     *
+     * user_type=wx_user 时 user_id 是小程序 openid，对应 wx_user.mini_openid。
+     * 实体里没有这两个展示字段，所以转成 Map 返回，不污染 SysClientUserAuth。
+     */
+    private List<Map<String, Object>> attachUserInfo(List<SysClientUserAuth> rows) {
+        List<Map<String, Object>> list = new ArrayList<>(rows.size());
+        if (rows.isEmpty()) return list;
+
+        List<String> openids = rows.stream()
+                .map(SysClientUserAuth::getUserId)
+                .filter(StringUtils::hasText)
+                .distinct()
+                .collect(Collectors.toList());
+        Map<String, WxUser> fanByMiniOpenid = new LinkedHashMap<>();
+        if (!openids.isEmpty()) {
+            wxUserService.list(new QueryWrapper<WxUser>().in("mini_openid", openids))
+                    .forEach(u -> fanByMiniOpenid.put(u.getMiniOpenid(), u));
+        }
+
+        for (SysClientUserAuth r : rows) {
+            Map<String, Object> m = new LinkedHashMap<>(16);
+            m.put("id", r.getId());
+            m.put("userId", r.getUserId());
+            m.put("userType", r.getUserType());
+            m.put("clientCode", r.getClientCode());
+            m.put("clientName", r.getClientName());
+            m.put("isDefault", r.getIsDefault());
+            m.put("status", r.getStatus());
+            m.put("lastLoginAt", r.getLastLoginAt());
+            m.put("createTime", r.getCreateTime());
+            m.put("updatedAt", r.getUpdatedAt());
+            WxUser fan = fanByMiniOpenid.get(r.getUserId());
+            m.put("nickname", fan == null ? null : fan.getNickname());
+            m.put("userPhone", fan == null ? null : fan.getPhone());
+            list.add(m);
+        }
+        return list;
+    }
+
+    @Override
+    public List<Map<String, Object>> listGrantableUsers(String keyword) {
+        QueryWrapper<WxUser> w = new QueryWrapper<WxUser>()
+                .isNotNull("mini_openid")
+                .ne("mini_openid", "");
+        if (StringUtils.hasText(keyword)) {
+            // 按 openid / 昵称 / 手机号模糊找
+            w.and(q -> q.like("mini_openid", keyword)
+                    .or().like("nickname", keyword)
+                    .or().like("phone", keyword));
+        }
+        w.orderByDesc("mini_link_time").last("limit 50");
+
+        List<Map<String, Object>> list = new ArrayList<>();
+        for (WxUser u : wxUserService.list(w)) {
+            Map<String, Object> m = new LinkedHashMap<>(4);
+            m.put("miniOpenid", u.getMiniOpenid());
+            m.put("nickname", u.getNickname());
+            m.put("userPhone", u.getPhone());
+            list.add(m);
+        }
+        return list;
     }
 
     @Override

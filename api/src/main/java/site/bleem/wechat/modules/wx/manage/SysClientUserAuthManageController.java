@@ -41,6 +41,14 @@ public class SysClientUserAuthManageController {
         return R.ok().put(authService.getById(id));
     }
 
+    /** 新增授权时可选的小程序用户：已关联小程序的粉丝，带昵称、手机号 */
+    @GetMapping("/grantableUsers")
+    @RequiresPermissions("wx:clientuserauth:list")
+    @ApiOperation(value = "可授权的小程序用户下拉")
+    public R grantableUsers(@RequestParam(required = false) String keyword) {
+        return R.ok().put(authService.listGrantableUsers(keyword));
+    }
+
     @PostMapping("/save")
     @RequiresPermissions("wx:clientuserauth:save")
     @ApiOperation(value = "新增")

@@ -53,6 +53,7 @@ export const api = {
   // update 是 PUT、delete 是 DELETE，和上面清一色 POST 不同，这是后端
   // SysClientUserAuthManageController 的写法，别照着改成 post
   clientUserAuths: (params) => http.get('/manage/sysClientUserAuth/list', { params }),
+  grantableUsers: (keyword) => http.get('/manage/sysClientUserAuth/grantableUsers', { params: { keyword } }),
   saveClientUserAuth: (data) => http.post('/manage/sysClientUserAuth/save', data),
   updateClientUserAuth: (data) => http.put('/manage/sysClientUserAuth/update', data),
   deleteClientUserAuths: (ids) => http.delete('/manage/sysClientUserAuth/delete', { data: ids }),

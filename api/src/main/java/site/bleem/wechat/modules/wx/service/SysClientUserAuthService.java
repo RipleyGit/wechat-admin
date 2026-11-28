@@ -13,8 +13,14 @@ import java.util.Map;
  */
 public interface SysClientUserAuthService extends IService<SysClientUserAuth> {
 
-    /** 后台列表分页，按用户/应用/状态筛选 */
+    /** 后台列表分页，按用户/应用/状态筛选。每行附带用户昵称、手机号（来自 wx_user） */
     PageUtils queryPage(Map<String, Object> params);
+
+    /**
+     * 可授权的小程序用户：已关联小程序（mini_openid 非空）的 wx_user，
+     * 新增授权时下拉选用。返回 openid / 昵称 / 手机号。
+     */
+    java.util.List<java.util.Map<String, Object>> listGrantableUsers(String keyword);
 
     /**
      * 查某个小程序用户 status=1 的授权列表，登录接口用来组装 appCodes / defaultCode。

@@ -32,7 +32,14 @@
 
       <el-table :data="list" v-loading="loading" @selection-change="(rows) => selected = rows">
         <el-table-column type="selection" width="48" />
-        <el-table-column label="用户 openid" min-width="230" show-overflow-tooltip>
+        <el-table-column label="用户" min-width="150">
+          <template #default="{ row }">
+            <div v-if="row.nickname">{{ row.nickname }}</div>
+            <div v-else class="muted">未填写昵称</div>
+            <div class="muted">{{ row.userPhone || '无手机号' }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="openid" min-width="210" show-overflow-tooltip>
           <template #default="{ row }">
             <div class="mono">{{ row.userId }}</div>
             <div class="mono muted">{{ row.userType }}</div>
@@ -80,13 +87,19 @@
 
     <el-dialog v-model="dialog" :title="form.id ? '编辑授权' : '新增授权'" width="560">
       <el-form label-width="104">
-        <el-form-item label="用户 openid">
-          <el-input v-model="form.userId" :disabled="!!form.id" placeholder="用户在门户小程序下的 openid" />
+        <el-form-item label="用户">
+          <!-- 编辑时唯一键不可改，用只读输入框原样显示；新增时从已关联小程序的粉丝里选 -->
+          <el-input v-if="form.id" :model-value="userLabel(form.userId)" disabled />
+          <el-select v-else v-model="form.userId" filterable remote :remote-method="searchUsers"
+                     :loading="userOptionsLoading" placeholder="输入昵称/手机号/openid 搜索" class="grow">
+            <el-option v-for="u in userOptions" :key="u.miniOpenid" :value="u.miniOpenid"
+                       :label="userOptionLabel(u)" />
+          </el-select>
           <div v-if="form.id" class="hint">
             用户 + 应用是这条记录的业务唯一键，建好之后不能改
           </div>
           <div v-else class="hint">
-            授权的是小程序用户在门户下的 openid（已关联服务号粉丝的那个 openid）
+            候选只有已完成关联服务号的小程序用户（最多显示 50 条，可搜索昵称/手机号/openid）
           </div>
         </el-form-item>
         <el-form-item label="应用">
@@ -131,6 +144,37 @@ const dialog = ref(false)
 const saving = ref(false)
 const form = reactive({})
 
+// 新增授权时的用户下拉。候选来自 /grantableUsers：已关联小程序的粉丝（mini_openid 非空），
+// 服务端最多回 50 条，支持关键字搜索昵称/手机号/openid
+const userOptions = ref([])
+const userOptionsLoading = ref(false)
+
+async function searchUsers(keyword) {
+  userOptionsLoading.value = true
+  try {
+    const r = await api.grantableUsers(keyword)
+    userOptions.value = r.data || []
+  } finally {
+    userOptionsLoading.value = false
+  }
+}
+
+function userOptionLabel(u) {
+  const name = u.nickname || '未填写昵称'
+  const phone = u.userPhone ? ` · ${u.userPhone}` : ''
+  return `${name}${phone} · ${u.miniOpenid}`
+}
+
+// 编辑对话框里用户字段只读显示：从当前页列表里找这一行的昵称/手机号拼个可读文案，
+// 找不到（列表已翻页或被筛掉）就退回裸 openid
+function userLabel(userId) {
+  const row = list.value.find(r => r.userId === userId)
+  if (!row) return userId
+  const name = row.nickname || '未填写昵称'
+  const phone = row.userPhone ? ` · ${row.userPhone}` : ''
+  return `${name}${phone} · ${userId}`
+}
+
 // 筛选下拉的候选值从当前页数据里收集，后端没有「列出所有应用 code」的接口。
 // 代价是候选项只覆盖当前页，所以下拉开了 filterable，必要时能手输
 const appCodeOptions = computed(() => uniq(list.value.map(r => r.clientCode)))
@@ -167,6 +211,11 @@ function edit(row) {
     statusOn: row.status === undefined ? true : row.status === 1,
   })
   dialog.value = true
+  // 新增时预加载一批候选，不用等用户先打字才看到选项；编辑时字段是只读的，不用加载
+  if (!form.id) {
+    userOptions.value = []
+    searchUsers('')
+  }
 }
 
 async function save() {
@@ -203,7 +252,7 @@ async function save() {
 async function removeRows(rows) {
   if (!rows.length) return
   const who = rows.length === 1
-    ? `「${rows[0].userId} / ${rows[0].clientCode}」`
+    ? `「${rows[0].nickname || rows[0].userId} / ${rows[0].clientCode}」`
     : `这 ${rows.length} 条授权`
   try {
     await ElMessageBox.confirm(
