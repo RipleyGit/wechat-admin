@@ -65,8 +65,10 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     environment: production
-    # 经跳板机（阿里云 VPS）+ ZeroTier 到 NAS：runner 到跳板机是公网 SSH，
-    # 跳板机到 NAS 走 ZeroTier 内网；70MB 的 jar 经两段转发，不再走 Tailscale DERP
+    # 回滚到最初的部署方式：直连阿里云 VPS（公网服务器），不再经跳板机到 NAS。
+    # 部署路径 /opt/wechat-admin，应用以 systemd 服务 wechat-admin 运行，
+    # Nginx 提供前端并反代 /wx/ 到 127.0.0.1:18088。
+    # （2026-11-28 由跳板机 + NAS 方案回滚；原始设计见 4194f0f。）
     timeout-minutes: 30
     steps:
       - name: Download web artifact
@@ -83,89 +85,67 @@ jobs:
           name: api-jar
           path: release/api
 
-      # 部署经跳板机走：runner -> 阿里云 VPS（跳板机，公网 SSH）-> ZeroTier -> NAS。
-      # 缺任何一个 secret 都尽早失败，避免连到旧地址。
-      # DEPLOY_SSH_KEY 是专用部署私钥的完整内容（含 BEGIN/END 行），同一把密钥
-      # 同时用于两段认证，对应公钥要分别装进 VPS 上 root 和 NAS 上 ripley-nas 的
-      # ~/.ssh/authorized_keys。
-      - name: Validate NAS deploy configuration
+      # 直连云服务器部署。缺任何一个 secret 都尽早失败，避免部署到错误地址。
+      # DEPLOY_SSH_PRIVATE_KEY 是部署用户私钥的完整内容（含 BEGIN/END 行），
+      # DEPLOY_KNOWN_HOSTS 是 ssh-keyscan 的输出；对应公钥要装进部署用户
+      # ~/.ssh/authorized_keys（部署用户见 DEPLOY_USER，不要用 root）。
+      - name: Validate deploy configuration
         id: validate
         env:
-          JUMP_HOST: ${{ secrets.JUMP_HOST }}
-          JUMP_PORT: ${{ secrets.JUMP_PORT }}
-          JUMP_USER: ${{ secrets.JUMP_USER }}
-          NAS_HOST: ${{ secrets.NAS_HOST }}
-          NAS_PORT: ${{ secrets.NAS_PORT }}
-          NAS_USER: ${{ secrets.NAS_USER }}
-          NAS_DEPLOY_PATH: ${{ secrets.NAS_DEPLOY_PATH }}
-          NAS_RESTART_COMMAND: ${{ secrets.NAS_RESTART_COMMAND }}
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
           missing=''
-          [ -n "$JUMP_HOST" ] || missing="$missing JUMP_HOST"
-          [ -n "$JUMP_PORT" ] || missing="$missing JUMP_PORT"
-          [ -n "$JUMP_USER" ] || missing="$missing JUMP_USER"
-          [ -n "$NAS_HOST" ] || missing="$missing NAS_HOST"
-          [ -n "$NAS_PORT" ] || missing="$missing NAS_PORT"
-          [ -n "$NAS_USER" ] || missing="$missing NAS_USER"
-          [ -n "$NAS_DEPLOY_PATH" ] || missing="$missing NAS_DEPLOY_PATH"
-          [ -n "$NAS_RESTART_COMMAND" ] || missing="$missing NAS_RESTART_COMMAND"
-          [ -n "$DEPLOY_SSH_KEY" ] || missing="$missing DEPLOY_SSH_KEY"
+          [ -n "$DEPLOY_HOST" ] || missing="$missing DEPLOY_HOST"
+          [ -n "$DEPLOY_PORT" ] || missing="$missing DEPLOY_PORT"
+          [ -n "$DEPLOY_USER" ] || missing="$missing DEPLOY_USER"
+          [ -n "$DEPLOY_PATH" ] || missing="$missing DEPLOY_PATH"
+          [ -n "$DEPLOY_SSH_PRIVATE_KEY" ] || missing="$missing DEPLOY_SSH_PRIVATE_KEY"
+          [ -n "$DEPLOY_KNOWN_HOSTS" ] || missing="$missing DEPLOY_KNOWN_HOSTS"
           if [ -n "$missing" ]; then
             echo "::error::缺少必要的部署 Secrets:$missing"
             exit 1
           fi
 
-      # 沿用密钥认证。跳板机的主机密钥用 ssh-keyscan 预先写入 known_hosts；
-      # NAS 的主机密钥用 StrictHostKeyChecking=accept-new 在首次连接时记录
-      #（密钥变了会拒绝，只接受首次见到）。
+      # 密钥与主机密钥都走 secret，不做 ssh-keyscan。
       - name: Configure deployment SSH key
         id: configure_ssh
         env:
-          JUMP_HOST: ${{ secrets.JUMP_HOST }}
-          JUMP_PORT: ${{ secrets.JUMP_PORT }}
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
           install -d -m 700 ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -p "${JUMP_PORT:-2232}" "$JUMP_HOST" >> ~/.ssh/known_hosts
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
       - name: Upload release files
         id: upload
         env:
-          JUMP_HOST: ${{ secrets.JUMP_HOST }}
-          JUMP_PORT: ${{ secrets.JUMP_PORT }}
-          JUMP_USER: ${{ secrets.JUMP_USER }}
-          NAS_HOST: ${{ secrets.NAS_HOST }}
-          NAS_PORT: ${{ secrets.NAS_PORT }}
-          NAS_USER: ${{ secrets.NAS_USER }}
-          NAS_DEPLOY_PATH: ${{ secrets.NAS_DEPLOY_PATH }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
           RELEASE_ID: ${{ github.sha }}
         run: |
-          # 经跳板机（阿里云 VPS）到 NAS：runner 先 SSH 到跳板机，再经 ZeroTier 到 NAS。
-          # 跳板机只做 TCP 转发，数据不落盘。同一把部署密钥同时用于两段认证
-          #（ProxyJump 下本地 ssh 客户端直接和跳板机、NAS 两端做认证）。
+          # 直连云服务器：runner 直接 SSH 到 DEPLOY_HOST，不再经跳板机。
           # BatchMode 禁止任何交互式提示；ServerAlive 让链路真死时快速失败。
-          SSH_OPTS="-i $HOME/.ssh/id_ed25519 -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=accept-new"
-          JUMP="$JUMP_USER@$JUMP_HOST:${JUMP_PORT:-2232}"
-          NAS_PORT="${NAS_PORT:-22}"
-          TARGET="$NAS_USER@$NAS_HOST"
+          SSH_OPTS="-i $HOME/.ssh/id_ed25519 -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=10 -o ServerAliveCountMax=3"
+          DEPLOY_PORT="${DEPLOY_PORT:-2232}"
+          TARGET="$DEPLOY_USER@$DEPLOY_HOST"
 
-          echo '== 预检：经跳板机连通 NAS =='
-          ssh $SSH_OPTS -J "$JUMP" -p "$NAS_PORT" "$TARGET" true || {
-            echo '::error::经跳板机连不上 NAS：检查跳板机到 NAS 的 ZeroTier、NAS 上 ripley-nas 的 authorized_keys、以及部署密钥'
-            exit 1
-          }
+          ssh -p "$DEPLOY_PORT" $SSH_OPTS "$TARGET" \
+            "mkdir -p '$DEPLOY_PATH/.deploy/$RELEASE_ID/api' '$DEPLOY_PATH/.deploy/$RELEASE_ID/web'"
 
-          ssh $SSH_OPTS -J "$JUMP" -p "$NAS_PORT" "$TARGET" \
-            "mkdir -p '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api' '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web'"
-
-          # rsync 走同一条跳板通道；--partial 让中断后可断点续传，每步最多重试 3 次
+          # rsync 直传；--partial 让中断后可断点续传，每步最多重试 3 次
           for attempt in 1 2 3; do
-            if rsync -az --partial --timeout=120 -e "ssh $SSH_OPTS -J $JUMP -p $NAS_PORT" \
-              release/web/ "$TARGET:$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web/"; then
+            if rsync -az --delete --partial --timeout=120 -e "ssh -p $DEPLOY_PORT $SSH_OPTS" \
+              release/web/ "$TARGET:$DEPLOY_PATH/.deploy/$RELEASE_ID/web/"; then
               break
             fi
             echo "web 上传第 $attempt 次失败，重试"
@@ -173,8 +153,8 @@ jobs:
             sleep 5
           done
           for attempt in 1 2 3; do
-            if rsync -az --partial --timeout=120 -e "ssh $SSH_OPTS -J $JUMP -p $NAS_PORT" \
-              release/api/wx-api.jar "$TARGET:$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar"; then
+            if rsync -az --partial --timeout=120 -e "ssh -p $DEPLOY_PORT $SSH_OPTS" \
+              release/api/wx-api.jar "$TARGET:$DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar"; then
               break
             fi
             echo "api jar 上传第 $attempt 次失败，重试"
@@ -184,62 +164,46 @@ jobs:
 
           # 校验远端文件完整（jar 字节数一致，web 有 index.html）
           local_size=$(wc -c < release/api/wx-api.jar | tr -d ' ')
-          ssh $SSH_OPTS -J "$JUMP" -p "$NAS_PORT" "$TARGET" \
-            "test -s '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar' && test -f '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web/index.html' && test \"\$(wc -c < '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar' | tr -d ' ')\" = '$local_size'" \
+          ssh -p "$DEPLOY_PORT" $SSH_OPTS "$TARGET" \
+            "test -s '$DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar' && test -f '$DEPLOY_PATH/.deploy/$RELEASE_ID/web/index.html' && test \"\$(wc -c < '$DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar' | tr -d ' ')\" = '$local_size'" \
             || { echo '::error::远端文件校验失败：jar 大小不一致或文件缺失'; exit 1; }
           echo "上传完成（web + api jar $local_size 字节）"
 
-      # DSM 没有 systemd，原来的 systemctl restart / is-active 已移除。
-      # 重启与服务状态检查统一交给 NAS_RESTART_COMMAND（在 NAS 上执行，失败必须返回非 0），例如：
-      #   sudo /volume1/docker/wechat-admin/restart.sh
-      #   docker restart wechat-admin
-      #   sudo synopkg restart wechat-admin
-      # 健康检查在 NAS 本机执行，127.0.0.1 指向 NAS 自身（与原 workflow 一致：
-      # 原来也是通过 ssh 在服务器本机探测，并非公网探测）。
-      # 服务若跑在 Docker 中，需确认端口已映射到宿主机；
-      # 想验证公网链路可把 NAS_HEALTHCHECK_URL 改成公网地址，但必须先确认域名已切到 NAS。
+      # 应用以 systemd 服务 wechat-admin 运行（/etc/systemd/system/wechat-admin.service），
+      # 配置在 /etc/wechat-admin/wechat-admin.env；Nginx 提供前端并反代 /wx/ 到 127.0.0.1:18088。
+      # 健康检查在服务器本机执行，127.0.0.1 指向服务器自身。
       - name: Activate release
         id: activate
         env:
-          JUMP_HOST: ${{ secrets.JUMP_HOST }}
-          JUMP_PORT: ${{ secrets.JUMP_PORT }}
-          JUMP_USER: ${{ secrets.JUMP_USER }}
-          NAS_HOST: ${{ secrets.NAS_HOST }}
-          NAS_PORT: ${{ secrets.NAS_PORT }}
-          NAS_USER: ${{ secrets.NAS_USER }}
-          NAS_DEPLOY_PATH: ${{ secrets.NAS_DEPLOY_PATH }}
-          NAS_RESTART_COMMAND: ${{ secrets.NAS_RESTART_COMMAND }}
-          NAS_HEALTHCHECK_URL: ${{ secrets.NAS_HEALTHCHECK_URL }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
           RELEASE_ID: ${{ github.sha }}
         run: |
-          if [ -z "${NAS_RESTART_COMMAND:-}" ]; then
-            echo '::error::NAS_RESTART_COMMAND secret 未配置：DSM 没有 systemd，必须指定服务重启命令'
-            exit 1
-          fi
-          SSH_OPTS="-i $HOME/.ssh/id_ed25519 -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=accept-new"
-          JUMP="$JUMP_USER@$JUMP_HOST:${JUMP_PORT:-2232}"
-          NAS_PORT="${NAS_PORT:-22}"
-          HEALTHCHECK_URL="${NAS_HEALTHCHECK_URL:-http://127.0.0.1:18088/wx/notify/deploy-success}"
-          ssh $SSH_OPTS -J "$JUMP" -p "$NAS_PORT" "$NAS_USER@$NAS_HOST" \
+          SSH_OPTS="-i $HOME/.ssh/id_ed25519 -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=10 -o ServerAliveCountMax=3"
+          DEPLOY_PORT="${DEPLOY_PORT:-2232}"
+          ssh -p "$DEPLOY_PORT" $SSH_OPTS "$DEPLOY_USER@$DEPLOY_HOST" \
             "set -eu
-            test -s '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar'
-            test -f '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web/index.html'
-            rm -rf '$NAS_DEPLOY_PATH/web.previous'
-            test ! -e '$NAS_DEPLOY_PATH/web' || mv '$NAS_DEPLOY_PATH/web' '$NAS_DEPLOY_PATH/web.previous'
-            mv '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/web' '$NAS_DEPLOY_PATH/web'
-            test ! -e '$NAS_DEPLOY_PATH/wechat-admin.previous.jar' || rm -f '$NAS_DEPLOY_PATH/wechat-admin.previous.jar'
-            test ! -e '$NAS_DEPLOY_PATH/wechat-admin.jar' || mv '$NAS_DEPLOY_PATH/wechat-admin.jar' '$NAS_DEPLOY_PATH/wechat-admin.previous.jar'
-            mv '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar' '$NAS_DEPLOY_PATH/wechat-admin.jar'
-            $NAS_RESTART_COMMAND
+            test -s '$DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar'
+            test -f '$DEPLOY_PATH/.deploy/$RELEASE_ID/web/index.html'
+            rm -rf '$DEPLOY_PATH/web.previous'
+            test ! -e '$DEPLOY_PATH/web' || mv '$DEPLOY_PATH/web' '$DEPLOY_PATH/web.previous'
+            mv '$DEPLOY_PATH/.deploy/$RELEASE_ID/web' '$DEPLOY_PATH/web'
+            test ! -e '$DEPLOY_PATH/wechat-admin.previous.jar' || rm -f '$DEPLOY_PATH/wechat-admin.previous.jar'
+            test ! -e '$DEPLOY_PATH/wechat-admin.jar' || mv '$DEPLOY_PATH/wechat-admin.jar' '$DEPLOY_PATH/wechat-admin.previous.jar'
+            mv '$DEPLOY_PATH/.deploy/$RELEASE_ID/api/wx-api.jar' '$DEPLOY_PATH/wechat-admin.jar'
+            systemctl restart wechat-admin
+            systemctl is-active --quiet wechat-admin
             ready=0
             for i in \$(seq 1 30); do
-              code=\$(curl -s -o /dev/null -w '%{http_code}' '$HEALTHCHECK_URL' -X POST \
+              code=\$(curl -s -o /dev/null -w '%{http_code}' 'http://127.0.0.1:18088/wx/notify/deploy-success' -X POST \
                 -H 'Content-Type: application/json' -H 'X-Notify-Secret: x' -d '{}' || true)
               if [ \"\$code\" != '000' ] && [ -n \"\$code\" ]; then ready=1; break; fi
               sleep 2
             done
             [ \"\$ready\" -eq 1 ] || { echo 'service did not become ready in time'; exit 1; }
-            rm -rf '$NAS_DEPLOY_PATH/.deploy/$RELEASE_ID'"
+            rm -rf '$DEPLOY_PATH/.deploy/$RELEASE_ID'"
 
       # 通知走通用推送网关：请求头里的公众号推送密钥决定发到哪个公众号，
       # 地址里的通道标识决定用哪套收件人和文案（在后台「消息推送」页面配置）
@@ -324,7 +288,7 @@ jobs:
               'STEP_DOWNLOAD_API':   ('下载后端构件', ''),
               'STEP_VALIDATE':       ('校验部署配置', ''),
               'STEP_CONFIGURE_SSH':  ('配置部署 SSH 密钥', ''),
-              'STEP_UPLOAD':         ('上传发布文件到 NAS', ''),
+              'STEP_UPLOAD':         ('上传发布文件到云服务器', ''),
               'STEP_ACTIVATE':       ('激活新版本并重启服务', ''),
           }
           failed_step = '未知步骤'
