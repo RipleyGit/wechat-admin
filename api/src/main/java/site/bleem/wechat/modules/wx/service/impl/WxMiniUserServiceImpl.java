@@ -83,6 +83,19 @@ public class WxMiniUserServiceImpl extends ServiceImpl<WxMiniUserMapper, WxMiniU
     }
 
     @Override
+    public WxMiniUser getByCode(String miniAppid, String code) {
+        if (!StringUtils.hasText(miniAppid) || !StringUtils.hasText(code)) {
+            throw new RRException("miniAppid 与 code 不能为空");
+        }
+        WxAccount account = wxAccountService.getByMiniAppid(miniAppid);
+        String miniOpenid = code2Session(account, miniAppid, code).getString("openid");
+        if (!StringUtils.hasText(miniOpenid)) {
+            throw new RRException("微信登录失败：未取得 openid");
+        }
+        return getByMiniOpenid(miniAppid, miniOpenid);
+    }
+
+    @Override
     public WxMiniUser login(WxMiniUserLoginForm form) {
         if (!StringUtils.hasText(form.getMiniAppid())) {
             throw new RRException("miniAppid 不能为空");

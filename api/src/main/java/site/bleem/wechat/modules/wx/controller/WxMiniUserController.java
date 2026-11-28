@@ -9,6 +9,7 @@ import site.bleem.wechat.common.utils.R;
 import site.bleem.wechat.modules.wx.entity.WxMiniUser;
 import site.bleem.wechat.modules.wx.form.WxMiniUserLoginForm;
 import site.bleem.wechat.modules.wx.form.WxMiniUserProfileForm;
+import site.bleem.wechat.modules.wx.service.MiniLinkService;
 import site.bleem.wechat.modules.wx.service.WxMiniUserService;
 
 import java.util.ArrayList;
@@ -32,6 +33,9 @@ public class WxMiniUserController {
 
     @Autowired
     private WxMiniUserService wxMiniUserService;
+
+    @Autowired
+    private MiniLinkService miniLinkService;
 
     /**
      * 登录：查档案，不存在则建档。
@@ -67,6 +71,38 @@ public class WxMiniUserController {
             return R.error("用户档案不存在");
         }
         return R.ok().put(toView(user));
+    }
+
+    /**
+     * 签发关联服务号用的一次性 ticket。只认 code，不接受直传 openid。
+     * 已关联过的用户直接返回 status=linked。
+     */
+    @PostMapping("/linkTicket")
+    @ApiOperation(value = "签发关联服务号的 ticket", notes = "入参 miniAppid + code")
+    public R linkTicket(@RequestBody WxMiniUserLoginForm form) {
+        return R.ok().put(miniLinkService.issueTicket(form.getMiniAppid(), form.getCode()));
+    }
+
+    /**
+     * 查关联状态：pending / linked / need_follow / conflict / expired / error
+     */
+    @GetMapping("/linkStatus")
+    @ApiOperation(value = "查询关联服务号的状态")
+    public R linkStatus(@RequestParam String ticket) {
+        Map<String, Object> data = new HashMap<>(2);
+        data.put("status", miniLinkService.status(ticket));
+        return R.ok().put(data);
+    }
+
+    /**
+     * 场景值为 link_<ticket> 的服务号临时二维码，返回 data URL
+     */
+    @GetMapping("/linkQrcode")
+    @ApiOperation(value = "生成关联服务号的带参二维码")
+    public R linkQrcode(@RequestParam String ticket) {
+        Map<String, Object> data = new HashMap<>(2);
+        data.put("base64", miniLinkService.qrcode(ticket));
+        return R.ok().put(data);
     }
 
     /**

@@ -43,6 +43,14 @@ public class WxUser implements Serializable {
     private JSONArray tagidList;
     private String subscribeScene;
     private String qrSceneStr;
+    /**
+     * 同一用户在门户小程序下的 appid / openid，由 MiniLinkService 关联时写入。
+     * 从微信同步粉丝信息（refreshUserInfo / syncWxUsers）时这三个字段为 null，
+     * MyBatis-Plus 默认字段策略 NOT_NULL 会跳过它们，所以同步不会把关联清掉。
+     */
+    private String miniAppid;
+    private String miniOpenid;
+    private Date miniLinkTime;
 
     public WxUser() {
     }

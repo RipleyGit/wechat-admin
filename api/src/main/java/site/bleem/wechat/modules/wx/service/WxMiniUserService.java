@@ -23,6 +23,13 @@ public interface WxMiniUserService extends IService<WxMiniUser> {
     WxMiniUser getByMiniOpenid(String miniAppid, String miniOpenid);
 
     /**
+     * 用 wx.login 的 code 取档案。openid 由服务端换取，调用方伪造不了。
+     *
+     * @return 档案；用户还没登录建档时返回 null
+     */
+    WxMiniUser getByCode(String miniAppid, String code);
+
+    /**
      * 小程序登录：查档案，不存在则建档。
      *
      * 建档后会尝试按 unionid / 手机号回填 serviceOpenid（关联服务号用户）。
