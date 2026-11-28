@@ -49,11 +49,11 @@ export const api = {
   channelInfo: (token) => http.get(`/channel-info/${token}`, { silent: true }),
   msgTemplates: (params) => http.get('/manage/msgTemplate/list', { params }),
   syncMsgTemplates: () => http.post('/manage/msgTemplate/syncWxTemplate'),
-  // 小程序用户。update 是 PUT、delete 是 DELETE，和本文件其他条目清一色 POST 不同，
-  // 这是后端 WxMiniUserManageController 的写法，别照着上面的改成 post
-  miniUsers: (params) => http.get('/manage/wxMiniUser/list', { params }),
-  saveMiniUser: (data) => http.post('/manage/wxMiniUser/save', data),
-  updateMiniUser: (data) => http.put('/manage/wxMiniUser/update', data),
-  deleteMiniUsers: (ids) => http.delete('/manage/wxMiniUser/delete', { data: ids }),
-  linkMiniUser: (id) => http.post(`/manage/wxMiniUser/link/${id}`),
+  // 用户应用管理（sys_client_user_auth）。一行一条授权记录（用户 × 应用）。
+  // update 是 PUT、delete 是 DELETE，和上面清一色 POST 不同，这是后端
+  // SysClientUserAuthManageController 的写法，别照着改成 post
+  clientUserAuths: (params) => http.get('/manage/sysClientUserAuth/list', { params }),
+  saveClientUserAuth: (data) => http.post('/manage/sysClientUserAuth/save', data),
+  updateClientUserAuth: (data) => http.put('/manage/sysClientUserAuth/update', data),
+  deleteClientUserAuths: (ids) => http.delete('/manage/sysClientUserAuth/delete', { data: ids }),
 }

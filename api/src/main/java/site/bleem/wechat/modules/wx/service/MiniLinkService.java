@@ -12,11 +12,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 import site.bleem.wechat.common.exception.RRException;
 import site.bleem.wechat.modules.wx.entity.WxAccount;
-import site.bleem.wechat.modules.wx.entity.WxMiniUser;
 import site.bleem.wechat.modules.wx.entity.WxUser;
 
 import java.io.File;
@@ -48,6 +46,7 @@ import java.util.UUID;
  */
 @Slf4j
 @Service
+@lombok.RequiredArgsConstructor
 public class MiniLinkService {
 
     public static final String SCENE_PREFIX = "link_";
@@ -70,9 +69,8 @@ public class MiniLinkService {
     private final RedisTemplate<String, Object> redisTemplate;
     private final WxMpService wxMpService;
     private final WxUserService wxUserService;
-    private final WxMiniUserService wxMiniUserService;
+    private final WxMiniAuthService wxMiniAuthService;
     private final WxAccountService wxAccountService;
-    private final TransactionTemplate transactionTemplate;
 
     /** 网页授权回调的对外根地址，要带 context-path /wx，域名须配成服务号「网页授权域名」 */
     @Value("${wx.mini.link-base-url:https://wechat.bleem.site/wx}")
@@ -85,17 +83,6 @@ public class MiniLinkService {
     @Value("${wx.mini.link-card-title:已完成关联，点击返回小程序}")
     private String cardTitle;
 
-    public MiniLinkService(RedisTemplate<String, Object> redisTemplate, WxMpService wxMpService,
-                           WxUserService wxUserService, WxMiniUserService wxMiniUserService,
-                           WxAccountService wxAccountService, TransactionTemplate transactionTemplate) {
-        this.redisTemplate = redisTemplate;
-        this.wxMpService = wxMpService;
-        this.wxUserService = wxUserService;
-        this.wxMiniUserService = wxMiniUserService;
-        this.wxAccountService = wxAccountService;
-        this.transactionTemplate = transactionTemplate;
-    }
-
     /**
      * 签发 ticket。只接受 wx.login 的 code：本接口无鉴权，若允许直传 openid，
      * 任何人都能拿别人的 openid 去关联。
@@ -103,13 +90,11 @@ public class MiniLinkService {
      * @return status=linked 表示已经关联过，不需要 ticket；否则带 ticket 与 expiresIn
      */
     public Map<String, Object> issueTicket(String miniAppid, String code) {
-        WxMiniUser user = wxMiniUserService.getByCode(miniAppid, code);
-        if (user == null) {
-            throw new RRException("用户档案不存在，请先登录");
-        }
+        // code 换 openid；已关联则直接告知，不再签发 ticket
+        String miniOpenid = wxMiniAuthService.code2Openid(miniAppid, code);
 
         Map<String, Object> result = new LinkedHashMap<>();
-        if (StringUtils.hasText(user.getServiceOpenid())) {
+        if (wxMiniAuthService.findLinkedFan(miniAppid, miniOpenid) != null) {
             result.put("status", STATUS_LINKED);
             return result;
         }
@@ -121,9 +106,8 @@ public class MiniLinkService {
         }
 
         JSONObject info = new JSONObject();
-        info.put("miniUserId", user.getId());
-        info.put("miniAppid", user.getMiniAppid());
-        info.put("miniOpenid", user.getMiniOpenid());
+        info.put("miniAppid", miniAppid);
+        info.put("miniOpenid", miniOpenid);
         info.put("serviceAppid", account.getAppid());
 
         String ticket = UUID.randomUUID().toString().replace("-", "");
@@ -250,7 +234,6 @@ public class MiniLinkService {
         String serviceAppid = info.getString("serviceAppid");
         String miniAppid = info.getString("miniAppid");
         String miniOpenid = info.getString("miniOpenid");
-        Long miniUserId = info.getLong("miniUserId");
 
         // 本地粉丝表可能没同步过这个人，或者记录的是旧的关注状态，以微信为准再查一次
         WxUser fan = wxUserService.getById(serviceOpenid);
@@ -262,49 +245,31 @@ public class MiniLinkService {
             return setStatus(ticket, STATUS_NEED_FOLLOW);
         }
 
-        // 一对一检查：粉丝已关联别的小程序用户
+        // 一对一检查：这个粉丝已经关联了别的小程序 openid
         if (StringUtils.hasText(fan.getMiniOpenid())
             && !(miniOpenid.equals(fan.getMiniOpenid()) && miniAppid.equals(fan.getMiniAppid()))) {
-            log.warn("[小程序关联] 冲突：粉丝 {} 已关联小程序用户 {}，本次 {}",
+            log.warn("[小程序关联] 冲突：粉丝 {} 已关联小程序 openid {}，本次 {}",
                 serviceOpenid, fan.getMiniOpenid(), miniOpenid);
             return setStatus(ticket, STATUS_CONFLICT);
         }
 
-        WxMiniUser mini = wxMiniUserService.getById(miniUserId);
-        if (mini == null) {
-            return setStatus(ticket, STATUS_ERROR);
-        }
-        // 一对一检查：小程序用户已关联别的粉丝
-        if (StringUtils.hasText(mini.getServiceOpenid()) && !serviceOpenid.equals(mini.getServiceOpenid())) {
-            log.warn("[小程序关联] 冲突：小程序用户 {} 已关联粉丝 {}，本次 {}",
-                miniOpenid, mini.getServiceOpenid(), serviceOpenid);
+        // 只写 wx_user 这一边。mini_openid 这个小程序 openid 若已经绑在另一个粉丝上，
+        // uk_mini_openid 唯一索引会让这条 update 抛 DuplicateKeyException，当作冲突处理。
+        boolean ok;
+        try {
+            ok = wxUserService.update(new UpdateWrapper<WxUser>()
+                .eq("openid", serviceOpenid)
+                .and(w -> w.isNull("mini_openid").or().eq("mini_openid", miniOpenid))
+                .set("mini_appid", miniAppid)
+                .set("mini_openid", miniOpenid)
+                .set("mini_link_time", new Date()));
+        } catch (DuplicateKeyException e) {
+            log.warn("[小程序关联] 冲突：小程序 openid {} 已关联别的粉丝", miniOpenid);
             return setStatus(ticket, STATUS_CONFLICT);
         }
 
-        Boolean ok;
-        try {
-            ok = transactionTemplate.execute(tx -> {
-                // 条件更新兜住并发：只在对方还没关联、或关联的就是自己时才写
-                boolean fanOk = wxUserService.update(new UpdateWrapper<WxUser>()
-                    .eq("openid", serviceOpenid)
-                    .and(w -> w.isNull("mini_openid").or().eq("mini_openid", miniOpenid))
-                    .set("mini_appid", miniAppid)
-                    .set("mini_openid", miniOpenid)
-                    .set("mini_link_time", new Date()));
-                boolean miniOk = fanOk && wxMiniUserService.update(new UpdateWrapper<WxMiniUser>()
-                    .eq("id", miniUserId)
-                    .and(w -> w.isNull("service_openid").or().eq("service_openid", serviceOpenid))
-                    .set("service_openid", serviceOpenid)
-                    .set("service_appid", serviceAppid));
-                if (!miniOk) tx.setRollbackOnly();
-                return miniOk;
-            });
-        } catch (DuplicateKeyException e) {
-            ok = false;
-        }
-
-        if (!Boolean.TRUE.equals(ok)) {
-            log.warn("[小程序关联] 写库未生效（并发冲突）miniOpenid={} serviceOpenid={}", miniOpenid, serviceOpenid);
+        if (!ok) {
+            log.warn("[小程序关联] 写库未生效 miniOpenid={} serviceOpenid={}", miniOpenid, serviceOpenid);
             return setStatus(ticket, STATUS_CONFLICT);
         }
         log.info("[小程序关联] 完成 miniOpenid={} → serviceOpenid={}", miniOpenid, serviceOpenid);

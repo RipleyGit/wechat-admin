@@ -2,80 +2,75 @@ package site.bleem.wechat.modules.wx.controller;
 
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.util.StringUtils;
+import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 import site.bleem.wechat.common.utils.R;
-import site.bleem.wechat.modules.wx.entity.WxMiniUser;
 import site.bleem.wechat.modules.wx.form.WxMiniUserLoginForm;
 import site.bleem.wechat.modules.wx.form.WxMiniUserProfileForm;
 import site.bleem.wechat.modules.wx.service.MiniLinkService;
-import site.bleem.wechat.modules.wx.service.WxMiniUserService;
+import site.bleem.wechat.modules.wx.service.WxMiniAuthService;
 
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 /**
  * 小程序用户（小程序端调用）
  *
- * ⚠ 无鉴权。ShiroConfig 里只有 /sys/** 与 /manage/** 走 oauth2，其余都是 anon，
- * 本控制器和既有的 /wxAuth 一样是公开的。因此：
- *  - 用 code 登录时 openid 由服务端换取，调用方伪造不了
- *  - 直传 miniOpenid 时无法验证来源，任何人都能用别人的 openid 读写档案
- * 生产环境建议只走 code，并把 miniOpenid 直传关掉（见 wx.mini.allow-openid-login）。
+ * ⚠ 无鉴权。ShiroConfig 里只有 /sys/** 与 /manage/** 走 oauth2，其余都是 anon。
+ * 所以所有接口都必须用 code 换 openid，绝不接受调用方直传 openid —— 直传
+ * 无法验证来源，任何人都能用别人的 openid 读写数据。
+ *
+ * 身份与资料基于 wx_user（服务号粉丝），应用可见性基于 sys_client_user_auth，
+ * 见 {@link WxMiniAuthService} 与 docs/小程序用户应用授权重构方案.md。
  */
 @RestController
 @RequestMapping("/wxMiniUser")
 @Api(tags = {"小程序用户-小程序端"})
+@RequiredArgsConstructor
 public class WxMiniUserController {
 
-    @Autowired
-    private WxMiniUserService wxMiniUserService;
-
-    @Autowired
-    private MiniLinkService miniLinkService;
+    private final WxMiniAuthService wxMiniAuthService;
+    private final MiniLinkService miniLinkService;
 
     /**
-     * 登录：查档案，不存在则建档。
+     * 登录。
      *
-     * 返回里的 needProfile 表示小程序该不该弹资料表单，
-     * directEntry 表示该不该直达某个子应用。
+     * 未关联服务号：返回 serviceLinked=false，前端拦去关联引导页，不建任何档。
+     * 已关联：返回资料 + appCodes + defaultCode + needProfile。
+     * 带 defaultCode 时（启动链接 ?defaultCode=）顺带自助开通并设为默认。
      */
     @PostMapping("/login")
-    @ApiOperation(value = "小程序登录", notes = "miniOpenid 与 code 二选一，code 优先")
+    @ApiOperation(value = "小程序登录", notes = "只接受 code")
     public R login(@RequestBody WxMiniUserLoginForm form) {
-        WxMiniUser user = wxMiniUserService.login(form);
-        return R.ok().put(toView(user));
+        return R.ok().put(wxMiniAuthService.login(form.getMiniAppid(), form.getCode(), form.getDefaultCode()));
     }
 
     /**
-     * 完善资料。cancelled=true 时只标记已弹过，不改其他字段。
+     * 完善资料，写入 wx_user。cancelled=true 时只标记已弹过。必须带 code。
      */
     @PutMapping("/profile")
     @ApiOperation(value = "完善小程序用户资料")
     public R profile(@RequestBody WxMiniUserProfileForm form) {
-        WxMiniUser user = wxMiniUserService.updateProfile(form);
-        return R.ok().put(toView(user));
+        Map<String, Object> view = wxMiniAuthService.updateProfile(
+                form.getMiniAppid(), form.getCode(), form.getNickname(),
+                form.getUserPhone(), Boolean.TRUE.equals(form.getCancelled()));
+        return R.ok().put(view);
     }
 
     /**
-     * 读档案。小程序冷启动后想单独刷一次用。
+     * 签发子应用登录授权码（ES256 JWT）。
+     * 门户进入子应用前调用，把 token 交给子应用登录接口。
+     * 见 docs/子应用对接门户登录授权码指南.md。
      */
-    @GetMapping("/info")
-    @ApiOperation(value = "读取小程序用户资料")
-    public R info(@RequestParam String miniAppid, @RequestParam String miniOpenid) {
-        WxMiniUser user = wxMiniUserService.getByMiniOpenid(miniAppid, miniOpenid);
-        if (user == null) {
-            return R.error("用户档案不存在");
-        }
-        return R.ok().put(toView(user));
+    @PostMapping("/clientToken")
+    @ApiOperation(value = "签发子应用登录授权码", notes = "入参 miniAppid + code + clientCode")
+    public R clientToken(@RequestBody WxMiniUserLoginForm form) {
+        return R.ok().put(wxMiniAuthService.issueClientToken(
+                form.getMiniAppid(), form.getCode(), form.getClientCode()));
     }
 
     /**
-     * 签发关联服务号用的一次性 ticket。只认 code，不接受直传 openid。
-     * 已关联过的用户直接返回 status=linked。
+     * 签发关联服务号用的一次性 ticket。只认 code。已关联过直接返回 status=linked。
      */
     @PostMapping("/linkTicket")
     @ApiOperation(value = "签发关联服务号的 ticket", notes = "入参 miniAppid + code")
@@ -83,9 +78,7 @@ public class WxMiniUserController {
         return R.ok().put(miniLinkService.issueTicket(form.getMiniAppid(), form.getCode()));
     }
 
-    /**
-     * 查关联状态：pending / linked / need_follow / conflict / expired / error
-     */
+    /** 查关联状态：pending / linked / need_follow / conflict / expired / error */
     @GetMapping("/linkStatus")
     @ApiOperation(value = "查询关联服务号的状态")
     public R linkStatus(@RequestParam String ticket) {
@@ -94,53 +87,12 @@ public class WxMiniUserController {
         return R.ok().put(data);
     }
 
-    /**
-     * 场景值为 link_<ticket> 的服务号临时二维码，返回 data URL
-     */
+    /** 场景值为 link_<ticket> 的服务号临时二维码，返回 data URL */
     @GetMapping("/linkQrcode")
     @ApiOperation(value = "生成关联服务号的带参二维码")
     public R linkQrcode(@RequestParam String ticket) {
         Map<String, Object> data = new HashMap<>(2);
         data.put("base64", miniLinkService.qrcode(ticket));
         return R.ok().put(data);
-    }
-
-    /**
-     * 组装给小程序的视图。
-     *
-     * 刻意不直接回实体：serviceOpenid / unionid / remark 是后台侧信息，
-     * 没必要下发到客户端。
-     */
-    private Map<String, Object> toView(WxMiniUser user) {
-        boolean enabled = !Boolean.FALSE.equals(user.getEnabled());
-
-        List<String> appCodes = new ArrayList<>();
-        if (enabled && user.getAppCodes() != null) {
-            for (int i = 0; i < user.getAppCodes().size(); i++) {
-                String code = user.getAppCodes().getString(i);
-                if (StringUtils.hasText(code)) appCodes.add(code);
-            }
-        }
-
-        // 默认应用必须仍在可见范围内，否则会直达到一个用户看不到的应用
-        String defaultCode = user.getDefaultCode();
-        if (!StringUtils.hasText(defaultCode) || !appCodes.contains(defaultCode)) {
-            defaultCode = "";
-        }
-
-        Map<String, Object> view = new HashMap<>(10);
-        view.put("miniAppid", user.getMiniAppid());
-        view.put("miniOpenid", user.getMiniOpenid());
-        view.put("serviceAppid", user.getServiceAppid());
-        view.put("nickname", user.getNickname());
-        view.put("userPhone", user.getUserPhone());
-        view.put("defaultCode", defaultCode);
-        view.put("appCodes", appCodes);
-        view.put("enabled", enabled);
-        /** 资料没填过就让小程序弹表单，用户取消也算填过 */
-        view.put("needProfile", !Boolean.TRUE.equals(user.getProfileFilled()));
-        /** 是否已关联上服务号用户，便于前端提示「去关注服务号」 */
-        view.put("serviceLinked", StringUtils.hasText(user.getServiceOpenid()));
-        return view;
     }
 }

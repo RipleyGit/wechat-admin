@@ -99,14 +99,18 @@ wx:
   # appid 与 AppSecret 已搬到 wx_account 的 mini_appid / mini_secret 两列，
   # 在运营台「选择工作公众号 → 配置」里维护，不再用环境变量
   # （见 db/migrations/20261026_add_wx_account_mini.sql）。
-  # /wxMiniUser/** 是公开接口（ShiroConfig 里 /** 是 anon），所以留着下面这个开关。
+  # /wxMiniUser/** 是公开接口，一律用 code 换 openid，不接受直传 openid。
   mini:
-    allow-openid-login: ${WX_MINI_ALLOW_OPENID_LOGIN:true}
     # 小程序用户关联服务号（MiniLinkService）。
     # 网页授权回调的对外根地址，要带 /wx；域名须同时配成服务号「网页授权域名」和小程序「业务域名」
     link-base-url: ${WX_MINI_LINK_BASE_URL:https://wechat.bleem.site/wx}
     # 扫码关联后回流小程序卡片的封面图（服务号永久素材 media_id）。留空则改发一段文字
     link-card-thumb-media-id: ${WX_MINI_LINK_CARD_THUMB_MEDIA_ID:}
+  # 子应用登录授权码（ClientTokenSigner）。
+  # 签名私钥，EC P-256 的 JWK(JSON)，含私钥参数 d 与 kid。不配则签发接口不可用、
+  # JWKS 为空。生成办法见 docs/子应用对接门户登录授权码指南.md。私钥不入仓库。
+  client-token:
+    private-jwk: ${WX_CLIENT_TOKEN_PRIVATE_JWK:}
 
 deploy:
   webhook:

@@ -49,9 +49,9 @@ const nav = [
   { label: '自动回复', to: '/replies', icon: ChatDotRound },
   { label: '渠道二维码', to: '/qrcodes', icon: Tickets },
   { label: '事件消息', to: '/notify', icon: BellFilled },
-  // 小程序用户的维度是 mini_appid，和上面这些跟着 appid cookie 走的页面不是一回事，
-  // 切换公众号不会改变这个页面的数据
-  { label: '小程序用户', to: '/miniusers', icon: Cellphone },
+  // 用户应用管理按 (user_type, user_id, client_code) 归档，和上面这些跟着 appid
+  // cookie 走的页面不是一回事，切换公众号不会改变这个页面的数据
+  { label: '用户应用管理', to: '/clientuserauth', icon: Cellphone },
 ]
 
 /**

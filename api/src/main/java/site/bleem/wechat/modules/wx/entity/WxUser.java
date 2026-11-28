@@ -51,6 +51,8 @@ public class WxUser implements Serializable {
     private String miniAppid;
     private String miniOpenid;
     private Date miniLinkTime;
+    /** 是否完善过小程序资料。0 时小程序弹资料表单，取消也置 1。老粉丝迁移时一律置 1 */
+    private Boolean profileFilled;
 
     public WxUser() {
     }

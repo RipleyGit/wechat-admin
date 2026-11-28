@@ -103,6 +103,14 @@
 			<artifactId>jjwt</artifactId>
 			<version>${jwt.version}</version>
 		</dependency>
+		<!-- 子应用登录授权码（ES256 + JWKS）用这个，不用上面的 jjwt 0.9.1：
+		     那个版本太老，EC 签名和 kid/JWKS 支持都跟不上。方案见
+		     portal-wechat-app/docs/子应用对接门户登录授权码指南.md -->
+		<dependency>
+			<groupId>com.nimbusds</groupId>
+			<artifactId>nimbus-jose-jwt</artifactId>
+			<version>9.37.3</version>
+		</dependency>
 		<dependency>
 			<groupId>com.github.axet</groupId>
 			<artifactId>kaptcha</artifactId>
