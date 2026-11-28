@@ -106,6 +106,7 @@ public class SysClientUserAuthServiceImpl extends ServiceImpl<SysClientUserAuthM
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void saveByAdmin(SysClientUserAuth auth) {
         if (!StringUtils.hasText(auth.getUserId()) || !StringUtils.hasText(auth.getClientCode())) {
             throw new RRException("userId 与 clientCode 不能为空");
